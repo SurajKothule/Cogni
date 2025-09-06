@@ -46,7 +46,7 @@ SESSIONS: Dict[str, Dict[str, Any]] = {}
 
 # ---------- Schemas ----------
 class StartChatRequest(BaseModel):
-    loan_type: str = Field(..., description="Type of loan: education, home, or personal")
+    loan_type: str = Field(..., description="Type of loan: education, home, personal, business, gold, or car")
 
 class StartChatResponse(BaseModel):
     session_id: str
@@ -83,24 +83,54 @@ def init_session(loan_type: str) -> str:
     return session_id
 
 def _to_float(v):
-    """Convert various string formats to float"""
+    """Convert various string formats to float with enhanced error handling"""
     if isinstance(v, (int, float)):
         return float(v)
+    
+    if v is None:
+        return 0.0
+        
     s = str(v).replace(",", "").strip().lower()
+    
+    # Handle empty strings
+    if not s:
+        return 0.0
+    
     # Handle Indian number formats
-    if s.endswith("l"):
-        return float(s[:-1]) * 100000
-    if s.endswith("lac") or s.endswith("lakh"):
+    if s.endswith("l") or "lac" in s or "lakh" in s:
         import re
         num = re.sub(r"[^\d.]", "", s)
-        return float(num) * 100000
-    if s.endswith("cr") or s.endswith("crore"):
+        try:
+            return float(num) * 100000
+        except ValueError:
+            return 0.0
+            
+    if s.endswith("cr") or "crore" in s:
         import re
         num = re.sub(r"[^\d.]", "", s)
-        return float(num) * 10000000
-    # Normal float conversion
+        try:
+            return float(num) * 10000000
+        except ValueError:
+            return 0.0
+    
+    # Normal float conversion with error handling
     import re
-    return float(re.sub(r"[^\d.]", "", s) or 0)
+    num_match = re.search(r"[\d.]+", s)
+    if num_match:
+        try:
+            return float(num_match.group())
+        except ValueError:
+            return 0.0
+    
+    return 0.0
+
+def clean_user_profile(user_profile: Dict[str, Any]) -> Dict[str, Any]:
+    """Clean and validate user profile data"""
+    cleaned = {}
+    for k, v in user_profile.items():
+        if v is not None and str(v).strip() != "":
+            cleaned[k] = v
+    return cleaned
 
 # ---------- Endpoints ----------
 @app.get("/health")
@@ -154,7 +184,7 @@ def chat_start(request: StartChatRequest):
 
 @app.post("/chat/message", response_model=MessageResponse)
 def chat_message(req: MessageRequest):
-    """Send a message in an existing chat session"""
+    """Send a message in an existing chat session with enhanced processing"""
     if req.session_id not in SESSIONS:
         raise HTTPException(status_code=404, detail="Invalid session_id.")
 
@@ -166,70 +196,150 @@ def chat_message(req: MessageRequest):
     try:
         service = LoanServiceFactory.get_service(loan_type, OPENAI_API_KEY)
         required_fields = service.get_required_fields()
-        
-        # Append user message
-        conversation.append({"role": "user", "content": req.message})
 
-        # Extract fields from user response
-        extracted = service.extract_info_from_response(req.message, conversation)
+        print(f"DEBUG - Starting message processing for {loan_type}")
+        print(f"DEBUG - Required fields: {required_fields}")
+        print(f"DEBUG - Current user profile keys: {list(user_profile.keys())}")
+        print(f"DEBUG - User message: '{req.message}'")
+
+        # Prefill user_profile from previous saved application if exists
+        try:
+            saved = None
+            if hasattr(storage_manager, 'get_application_by_session'):
+                saved = storage_manager.get_application_by_session(loan_type, req.session_id)
+            if saved and isinstance(saved, dict):
+                loan_data = saved.get('loan_data') or saved.get('prediction_result', {}).get('profile') or {}
+                for k, v in loan_data.items():
+                    if k in required_fields and k not in user_profile and v is not None:
+                        user_profile[k] = v
+                        print(f"DEBUG - Restored from storage: {k} = {v}")
+                
+                # Also hydrate customer info
+                ci = saved.get('customer_info', {})
+                if ci:
+                    if ci.get('name') and 'Customer_Name' in required_fields and 'Customer_Name' not in user_profile:
+                        user_profile['Customer_Name'] = ci['name']
+                        print(f"DEBUG - Restored customer name: {ci['name']}")
+                    if ci.get('email') and 'Customer_Email' in required_fields and 'Customer_Email' not in user_profile:
+                        user_profile['Customer_Email'] = ci['email']
+                        print(f"DEBUG - Restored customer email: {ci['email']}")
+                    if ci.get('phone') and 'Customer_Phone' in required_fields and 'Customer_Phone' not in user_profile:
+                        user_profile['Customer_Phone'] = ci['phone']
+                        print(f"DEBUG - Restored customer phone: {ci['phone']}")
+        except Exception as e:
+            print(f"DEBUG - Storage retrieval failed (non-fatal): {e}")
+        
+        # Append user message to conversation
+        conversation.append({"role": "user", "content": req.message})
+        print(f"DEBUG - Added user message to conversation")
+
+        # Extract fields from user response with enhanced error handling
+        try:
+            extracted = service.extract_info_from_response(req.message, conversation)
+            print(f"DEBUG - Extracted fields: {extracted}")
+        except Exception as e:
+            print(f"DEBUG - Extraction failed: {e}")
+            extracted = {}
+        
+        # Process extracted information with enhanced validation
         recorded_now = {}
         validation_errors = []
+        processing_errors = []
         
         for k, v in extracted.items():
-            if k in required_fields and v is not None:
-                # Validate the field if the service has validation method
-                if hasattr(service, 'validate_field'):
-                    is_valid, error_msg = service.validate_field(k, v)
-                    if not is_valid:
-                        validation_errors.append(error_msg)
-                        continue
-                
-                # Handle academic score conversion for education loans
-                if k == "Academic_Score" and hasattr(service, 'convert_academic_score_to_performance'):
-                    # Store both score and performance
-                    user_profile[k] = v
-                    user_profile["Academic_Performance"] = service.convert_academic_score_to_performance(float(v))
-                    recorded_now[k] = v
-                else:
-                    user_profile[k] = v
-                    recorded_now[k] = v
+            print(f"DEBUG - Processing field: {k} = {v}")
+            
+            # Check if field is required and has a non-empty value
+            if k in required_fields and v is not None and str(v).strip() != "":
+                try:
+                    # Validate the field if the service has validation method
+                    if hasattr(service, 'validate_field'):
+                        is_valid, error_msg = service.validate_field(k, v)
+                        print(f"DEBUG - Validation for {k}: valid={is_valid}, error='{error_msg}'")
+                        
+                        if not is_valid:
+                            validation_errors.append(error_msg)
+                            print(f"DEBUG - Validation failed for {k}: {error_msg}")
+                            continue
+                        else:
+                            print(f"DEBUG - Validation passed for {k}")
+                    
+                    # Handle special cases for different loan types
+                    if k == "Academic_Score" and hasattr(service, 'convert_academic_score_to_performance'):
+                        # Education loan special handling
+                        user_profile[k] = v
+                        user_profile["Academic_Performance"] = service.convert_academic_score_to_performance(float(v))
+                        recorded_now[k] = v
+                        recorded_now["Academic_Performance"] = user_profile["Academic_Performance"]
+                        print(f"DEBUG - Stored {k}={v} and derived Academic_Performance={user_profile['Academic_Performance']}")
+                    else:
+                        # Regular field storage
+                        user_profile[k] = v
+                        recorded_now[k] = v
+                        print(f"DEBUG - Stored {k} = {v}")
+                        
+                except Exception as field_error:
+                    processing_errors.append(f"Error processing {k}: {str(field_error)}")
+                    print(f"DEBUG - Processing error for {k}: {field_error}")
+                    continue
+            else:
+                if k in required_fields:
+                    print(f"DEBUG - Field {k} skipped: value is None or empty")
         
         # Check business logic validation for business loans
         if loan_type == "business" and hasattr(service, 'validate_business_logic'):
-            is_valid, error_msg = service.validate_business_logic(user_profile)
-            if not is_valid:
-                validation_errors.append(error_msg)
+            try:
+                is_valid, error_msg = service.validate_business_logic(user_profile)
+                if not is_valid:
+                    validation_errors.append(error_msg)
+                    print(f"DEBUG - Business logic validation failed: {error_msg}")
+            except Exception as e:
+                print(f"DEBUG - Business logic validation error: {e}")
         
-        # If there are validation errors, return them immediately
+        # Clean user profile to remove None/empty values
+        user_profile = clean_user_profile(user_profile)
+        print(f"DEBUG - Cleaned user profile keys: {list(user_profile.keys())}")
+        
+        # If there are validation errors, return only the first one to avoid overwhelming the user
         if validation_errors:
-            error_message = "\n".join(validation_errors)
+            error_message = validation_errors[0]
             conversation.append({"role": "assistant", "content": error_message})
+            
+            # Calculate current missing fields
+            current_missing = []
+            for f in required_fields:
+                if f not in user_profile or user_profile.get(f) is None:
+                    if f == "Academic_Performance" and "Academic_Score" in user_profile and loan_type == "education":
+                        continue
+                    current_missing.append(f)
+            
+            print(f"DEBUG - Returning validation error: {error_message}")
             return MessageResponse(
                 message=error_message,
                 recorded={},
-                missing_fields=[f for f in required_fields if f not in user_profile]
+                missing_fields=current_missing
             )
 
-        # Check completeness - for education loans, Academic_Performance is derived from Academic_Score
+        # Check completeness with enhanced logic
         missing_fields = []
         for f in required_fields:
-            if f not in user_profile:
-                # For education loans, if we have Academic_Score, we don't need Academic_Performance separately
+            if f not in user_profile or user_profile.get(f) is None:
+                # Special handling for derived fields
                 if f == "Academic_Performance" and "Academic_Score" in user_profile and loan_type == "education":
+                    print(f"DEBUG - {f} derived from Academic_Score, not missing")
                     continue
                 missing_fields.append(f)
+                print(f"DEBUG - Missing field: {f}")
 
-        print(f"DEBUG - Required fields: {required_fields}")
-        print(f"DEBUG - User profile keys: {list(user_profile.keys())}")
-        print(f"DEBUG - Missing fields: {missing_fields}")
+        print(f"DEBUG - Final missing fields: {missing_fields}")
+        print(f"DEBUG - User profile after processing: {list(user_profile.keys())}")
 
         # If complete -> run prediction and present result
         if not missing_fields:
-            print("All fields collected, processing prediction...")
-            # Don't add INFORMATION_COMPLETE to conversation - process prediction instead
+            print("DEBUG - All fields collected, processing prediction...")
 
             try:
-                # Convert string values to appropriate numeric types
+                # Convert string values to appropriate numeric types with enhanced error handling
                 typed = user_profile.copy()
                 
                 # Get numeric fields based on loan type
@@ -253,9 +363,21 @@ def chat_message(req: MessageRequest):
                     numeric_fields = ["Age", "applicant_annual_salary", "Coapplicant_Annual_Income", "CIBIL",
                                     "down_payment_percent", "Tenure", "loan_amount"]
                 
+                # Convert numeric fields with error handling
+                conversion_errors = []
                 for field in numeric_fields:
                     if field in typed:
-                        typed[field] = _to_float(typed[field])
+                        try:
+                            original_value = typed[field]
+                            typed[field] = _to_float(typed[field])
+                            print(f"DEBUG - Converted {field}: {original_value} -> {typed[field]}")
+                        except Exception as e:
+                            conversion_errors.append(f"Error converting {field}: {str(e)}")
+                            print(f"DEBUG - Conversion error for {field}: {e}")
+
+                if conversion_errors:
+                    error_msg = "Data conversion errors: " + "; ".join(conversion_errors)
+                    raise Exception(error_msg)
 
                 # Create prediction input without customer fields
                 prediction_input = {k: v for k, v in typed.items() 
@@ -263,33 +385,40 @@ def chat_message(req: MessageRequest):
                 
                 print(f"DEBUG - Prediction input for {loan_type}: {prediction_input}")
                 
-                # Make prediction
-                predicted_loan, predicted_interest = service.predict_loan(prediction_input)
+                # Make prediction with enhanced error handling
+                try:
+                    predicted_loan, predicted_interest = service.predict_loan(prediction_input)
+                    print(f"DEBUG - Prediction successful: loan={predicted_loan}, interest={predicted_interest}")
+                except Exception as pred_error:
+                    print(f"DEBUG - Prediction failed: {pred_error}")
+                    raise HTTPException(status_code=500, detail=f"Prediction error: {str(pred_error)}")
 
                 # Get requested amount for summary based on loan type
-                if loan_type == "education":
-                    summary_requested_amount = int(typed["Expected_Loan_Amount"])
-                elif loan_type == "home":
-                    summary_requested_amount = int(typed["Loan_amount_requested"])
-                elif loan_type == "personal":
-                    summary_requested_amount = int(typed["Expected_Loan_Amount"])
-                elif loan_type == "business":
-                    summary_requested_amount = int(typed["Expected_Loan_Amount"])
-                elif loan_type == "gold":
-                    summary_requested_amount = int(typed["Loan_Amount"])
-                elif loan_type == "car":
-                    summary_requested_amount = int(typed["loan_amount"])
-                else:
-                    summary_requested_amount = int(typed.get("Expected_Loan_Amount", typed.get("Loan_amount_requested", 500000)))
+                amount_field_mapping = {
+                    "education": "Expected_Loan_Amount",
+                    "home": "Loan_amount_requested", 
+                    "personal": "Expected_Loan_Amount",
+                    "business": "Expected_Loan_Amount",
+                    "gold": "Loan_Amount",
+                    "car": "loan_amount"
+                }
+                
+                amount_field = amount_field_mapping.get(loan_type, "Expected_Loan_Amount")
+                summary_requested_amount = int(typed.get(amount_field, 500000))
+                print(f"DEBUG - Requested amount: {summary_requested_amount}")
 
-                # Build summary
-                # Determine approved amount (security: don't reveal max if user requested less)
+                # Build summary with enhanced security
                 if predicted_loan >= summary_requested_amount:
-                    approved_amount = summary_requested_amount  # Give what they asked for
+                    # Full approval - customer gets what they asked for
+                    # SECURITY: Don't reveal maximum eligible amount
+                    approved_amount = summary_requested_amount
                     approval_status = "APPROVED"
+                    print(f"DEBUG - Full approval: {approved_amount}")
                 else:
-                    approved_amount = predicted_loan    # Give what they're eligible for
+                    # Partial approval - show only what they can actually get
+                    approved_amount = predicted_loan
                     approval_status = "PARTIAL_APPROVAL"
+                    print(f"DEBUG - Partial approval: {approved_amount}")
                 
                 summary = {
                     "loan_type": loan_type,
@@ -314,7 +443,7 @@ def chat_message(req: MessageRequest):
                 loan_data_for_prediction = {k: v for k, v in typed.items() 
                                           if not k.startswith("Customer_")}
                 
-                # Save customer application data
+                # Save customer application data with error handling
                 try:
                     file_path = storage_manager.save_customer_application(
                         loan_type=loan_type,
@@ -323,37 +452,20 @@ def chat_message(req: MessageRequest):
                         loan_data=loan_data_for_prediction,
                         prediction_result=summary
                     )
-                    print(f"Customer application saved: {file_path}")
-                except Exception as e:
-                    print(f"WARNING: Failed to save customer data: {e}")
+                    print(f"DEBUG - Customer application saved: {file_path}")
+                except Exception as save_error:
+                    print(f"WARNING: Failed to save customer data: {save_error}")
 
-                # Reset for new prediction but keep conversation
+                # Reset user profile for new prediction but keep conversation
                 SESSIONS[req.session_id]["user_profile"] = {}
+                print("DEBUG - Reset user profile for new session")
 
                 # Generate marketing-friendly response message
                 customer_name = customer_info.get("name", "")
                 loan_type_title = loan_type.title()
                 
-                # Get requested amount based on loan type
-                if loan_type == "education":
-                    requested_amount = int(typed['Expected_Loan_Amount'])
-                elif loan_type == "home":
-                    requested_amount = int(typed['Loan_amount_requested'])
-                elif loan_type == "personal":
-                    requested_amount = int(typed['Expected_Loan_Amount'])
-                elif loan_type == "gold":
-                    requested_amount = int(typed['Loan_Amount'])
-                elif loan_type == "business":
-                    requested_amount = int(typed['Expected_Loan_Amount'])
-                elif loan_type == "car":
-                    requested_amount = int(typed['loan_amount'])
-                else:
-                    requested_amount = int(typed.get('Expected_Loan_Amount', typed.get('Loan_amount_requested', predicted_loan)))
-                
-                if predicted_loan >= requested_amount:
-                    # Full approval - customer gets what they asked for
-                    # SECURITY: Don't reveal maximum eligible amount, only show requested amount
-                    approved_amount = requested_amount
+                if predicted_loan >= summary_requested_amount:
+                    # Full approval message
                     assistant_msg = (
                         f"🎉 Fantastic news {customer_name}! You're PRE-APPROVED for your {loan_type_title} Loan!\n\n"
                         f"✅ YES! You are eligible for ₹{approved_amount:,} at {predicted_interest}% per annum\n\n"
@@ -365,8 +477,7 @@ def chat_message(req: MessageRequest):
                         f"📞 We'll reach out to you at {customer_info.get('email', '')} or {customer_info.get('phone', '')} soon!"
                     )
                 else:
-                    # Partial approval - show only what they can actually get
-                    approved_amount = predicted_loan
+                    # Partial approval message
                     assistant_msg = (
                         f"💡 Great news {customer_name}! You're ELIGIBLE for a {loan_type_title} Loan!\n\n"
                         f"✅ You can get ₹{approved_amount:,.0f} at {predicted_interest}% per annum\n\n"
@@ -380,27 +491,72 @@ def chat_message(req: MessageRequest):
                     )
                 
                 conversation.append({"role": "assistant", "content": assistant_msg})
+                print("DEBUG - Added success message to conversation")
 
                 return MessageResponse(
                     message=assistant_msg,
-                    recorded={},  # Don't show recorded fields to user
+                    recorded={},  # Don't show internal fields to user
                     missing_fields=[],
                     prediction=summary
                 )
                 
             except Exception as e:
+                print(f"DEBUG - Prediction processing error: {e}")
+                import traceback
+                traceback.print_exc()
                 raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
 
-        # Otherwise, ask for missing information
+        # If we have missing fields, ask for them with improved follow-up
         if missing_fields:
-            followup = service.assistant_followup(conversation, user_profile, missing_fields)
-            conversation.append({"role": "assistant", "content": followup})
+            print(f"DEBUG - Generating follow-up for missing fields: {missing_fields}")
+            
+            try:
+                # Show progress by acknowledging what we have
+                collected_fields = [f for f in required_fields if f in user_profile and user_profile.get(f) is not None]
+                progress_msg = ""
+                
+                if recorded_now:
+                    # Acknowledge newly recorded information
+                    recorded_items = []
+                    for k, v in recorded_now.items():
+                        if k.startswith("Customer_"):
+                            continue  # Don't show customer fields in progress
+                        field_display = k.replace('_', ' ').title()
+                        if isinstance(v, (int, float)) and v > 1000:
+                            recorded_items.append(f"{field_display}: ₹{v:,.0f}")
+                        else:
+                            recorded_items.append(f"{field_display}: {v}")
+                    
+                    if recorded_items:
+                        progress_msg = f"Great! I've recorded: {', '.join(recorded_items)}. "
+                
+                # Generate contextual follow-up
+                followup = service.assistant_followup(conversation, user_profile, missing_fields)
+                
+                # Enhance follow-up with progress acknowledgment
+                if progress_msg:
+                    followup = progress_msg + followup
+                
+                conversation.append({"role": "assistant", "content": followup})
+                print(f"DEBUG - Generated follow-up message: {followup[:100]}...")
 
-            return MessageResponse(
-                message=followup,
-                recorded={},  # Don't show recorded fields to user
-                missing_fields=missing_fields
-            )
+                return MessageResponse(
+                    message=followup,
+                    recorded={},  # Don't show internal fields to user
+                    missing_fields=missing_fields
+                )
+                
+            except Exception as followup_error:
+                print(f"DEBUG - Follow-up generation error: {followup_error}")
+                # Fallback message
+                fallback_msg = f"Thank you! I need a few more details to process your {loan_type} loan application. Could you please provide the missing information?"
+                conversation.append({"role": "assistant", "content": fallback_msg})
+                
+                return MessageResponse(
+                    message=fallback_msg,
+                    recorded={},
+                    missing_fields=missing_fields
+                )
         else:
             # This should not happen as we handle complete cases above
             print("WARNING: No missing fields but prediction not processed")
@@ -410,24 +566,42 @@ def chat_message(req: MessageRequest):
                 missing_fields=[]
             )
         
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
+        print(f"ERROR - Unexpected error in chat_message: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error processing message: {str(e)}")
 
 @app.get("/session/{session_id}")
 def get_session_info(session_id: str):
-    """Get information about a chat session"""
+    """Get information about a chat session with enhanced details"""
     if session_id not in SESSIONS:
         raise HTTPException(status_code=404, detail="Session not found")
     
     state = SESSIONS[session_id]
     service = LoanServiceFactory.get_service(state["loan_type"], OPENAI_API_KEY)
     
+    # Calculate missing fields accounting for derived fields
+    missing_fields = []
+    collected_fields = list(state["user_profile"].keys())
+    
+    for f in service.get_required_fields():
+        if f not in state["user_profile"]:
+            # Handle derived fields
+            if f == "Academic_Performance" and "Academic_Score" in state["user_profile"] and state["loan_type"] == "education":
+                continue
+            missing_fields.append(f)
+    
     return {
         "session_id": session_id,
         "loan_type": state["loan_type"],
         "required_fields": service.get_required_fields(),
-        "collected_fields": list(state["user_profile"].keys()),
-        "missing_fields": [f for f in service.get_required_fields() if f not in state["user_profile"]],
+        "collected_fields": collected_fields,
+        "missing_fields": missing_fields,
+        "completion_percentage": round((len(collected_fields) / len(service.get_required_fields())) * 100, 2),
         "created_at": state["created_at"]
     }
 

@@ -2,6 +2,8 @@ from typing import Dict, List, Any, Tuple
 import pandas as pd
 import numpy as np
 import joblib
+import re
+import json
 from .base_loan import BaseLoanService
 
 class PersonalLoanService(BaseLoanService):
@@ -99,23 +101,284 @@ Return ONLY a JSON object with the extracted fields. If no information is found,
 Example: {{"Customer_Name": "John Doe", "Age": 35, "Employment_Type": "Salaried", "Annual_Income": 1200000, "Employment_Duration_Years": 12}}
 """.strip()
     
+    def extract_info_from_response(self, user_text: str, conversation: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Extract information from user response with enhanced fallback logic"""
+        print(f"DEBUG - Starting extraction for: '{user_text}'")
+        
+        # Try OpenAI first if available
+        if self.client:
+            extraction_prompt = self.get_extraction_prompt(user_text, conversation)
+            
+            try:
+                resp = self.client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": extraction_prompt}],
+                    temperature=0
+                )
+                extracted_text = resp.choices[0].message.content.strip()
+                m = re.search(r"\{.*\}", extracted_text, re.DOTALL)
+                if m:
+                    extracted = json.loads(m.group())
+                    print(f"DEBUG - OpenAI extracted: {extracted}")
+                    if extracted:  # Only return if we got something useful
+                        return extracted
+            except Exception as e:
+                print(f"DEBUG - OpenAI extraction failed: {e}")
+        
+        # Enhanced fallback extraction
+        return self._enhanced_fallback_extraction(user_text, conversation)
+    
+    def _enhanced_fallback_extraction(self, user_text: str, conversation: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Enhanced fallback extraction with context awareness"""
+        extracted = {}
+        text_lower = user_text.lower().strip()
+        
+        # Get context from last assistant message
+        last_assistant_msg = ""
+        if len(conversation) > 0:
+            for msg in reversed(conversation):
+                if msg.get('role') == 'assistant':
+                    last_assistant_msg = msg.get('content', '').lower()
+                    break
+        
+        # 1. CUSTOMER NAME
+        name_patterns = [
+            r"(?:my name is|i am|i'm|call me|name:|this is)\s+([a-zA-Z\s]{2,30})",
+            r"^([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)\s*$",
+        ]
+        
+        for pattern in name_patterns:
+            match = re.search(pattern, user_text, re.IGNORECASE)
+            if match:
+                name = match.group(1).strip().title()
+                if not any(word in name.lower() for word in ['years', 'old', 'work', 'job', 'score']):
+                    extracted['Customer_Name'] = name
+                    break
+        
+        # Context-aware name extraction
+        if not extracted.get('Customer_Name') and ('name' in last_assistant_msg or 'call you' in last_assistant_msg):
+            words = user_text.strip().split()
+            if 1 <= len(words) <= 3 and all(re.match(r'^[a-zA-Z]+$', word) for word in words):
+                if not any(word.lower() in ['yes', 'no', 'ok', 'sure', 'hello', 'hi'] for word in words):
+                    extracted['Customer_Name'] = user_text.strip().title()
+        
+        # 2. PHONE NUMBER
+        phone_patterns = [
+            r'(?:\+?91[\s-]?)?([6-9]\d{9})',
+            r'(?:phone|mobile|contact|number)[\s:]*(\+?91)?[\s-]*([6-9]\d{9})',
+        ]
+        
+        for pattern in phone_patterns:
+            match = re.search(pattern, user_text)
+            if match:
+                phone = match.group(-1)
+                if len(phone) == 10 and phone[0] in '6789':
+                    extracted['Customer_Phone'] = phone
+                    break
+        
+        # Context-aware phone extraction
+        if not extracted.get('Customer_Phone') and any(word in last_assistant_msg for word in ['phone', 'mobile', 'contact', 'number']):
+            phone_digits = re.sub(r'[^\d]', '', user_text)
+            if len(phone_digits) == 10 and phone_digits[0] in '6789':
+                extracted['Customer_Phone'] = phone_digits
+        
+        # 3. EMAIL
+        email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+        email_match = re.search(email_pattern, user_text)
+        if email_match:
+            extracted['Customer_Email'] = email_match.group(0)
+        
+        # 4. AGE
+        age_patterns = [
+            r'(?:age|years?\s*old|yrs?)\s*(?:is\s*)?(?::|=)?\s*(\d{1,2})',
+            r'(\d{1,2})\s*(?:years?\s*old|yrs?)',
+            r'i am\s*(\d{1,2})'
+        ]
+        
+        for pattern in age_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                age = int(match.group(1))
+                if 21 <= age <= 65:  # Personal loan specific age range
+                    extracted['Age'] = age
+                    break
+        
+        # Context-aware age extraction
+        if not extracted.get('Age') and 'age' in last_assistant_msg:
+            age_match = re.search(r'\b(\d{1,2})\b', user_text)
+            if age_match:
+                age = int(age_match.group(1))
+                if 21 <= age <= 65:
+                    extracted['Age'] = age
+        
+        # 5. PERSONAL LOAN SPECIFIC FIELDS
+        
+        # Annual Income extraction
+        income_patterns = [
+            r'(?:annual.*?income|yearly.*?salary|earn.*?yearly).*?([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?)',
+            r'([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?).*?(?:annual.*?income|yearly.*?salary)',
+        ]
+        
+        for pattern in income_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                amount = self.convert_amount_to_number(match.group(1))
+                if amount and amount >= 200000:  # Minimum reasonable income
+                    extracted['Annual_Income'] = amount
+                    break
+        
+        # CIBIL Score extraction
+        cibil_patterns = [
+            r'(?:cibil|credit.*?score)\s*(?:is\s*)?(?::|=)?\s*(\d{3})',
+            r'(\d{3})\s*(?:cibil|credit.*?score)',
+        ]
+        
+        for pattern in cibil_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                score = int(match.group(1))
+                if 300 <= score <= 900:
+                    extracted['CIBIL_Score'] = score
+                    break
+        
+        # Employment Type extraction
+        employment_mapping = {
+            'self employed': 'Self-Employed', 'self-employed': 'Self-Employed', 'business': 'Self-Employed', 'entrepreneur': 'Self-Employed',
+            'salaried': 'Salaried', 'employee': 'Salaried', 'job': 'Salaried', 'working': 'Salaried'
+        }
+        
+        for keyword, employment in employment_mapping.items():
+            if keyword in text_lower:
+                extracted['Employment_Type'] = employment
+                break
+        
+        # Employment Duration extraction
+        duration_patterns = [
+            r'(?:working|employed|experience).*?(\d+)\s*(?:years?|yrs?)',
+            r'(\d+)\s*(?:years?|yrs?).*?(?:working|employed|experience)',
+        ]
+        
+        for pattern in duration_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                duration = int(match.group(1))
+                if 1 <= duration <= 45:  # Reasonable employment duration
+                    extracted['Employment_Duration_Years'] = duration
+                    break
+        
+        # Existing EMIs extraction
+        emi_patterns = [
+            r'(?:existing.*?emi|current.*?emi|monthly.*?payment).*?([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?)',
+            r'([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?).*?(?:emi.*?payment)',
+        ]
+        
+        for pattern in emi_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                amount = self.convert_amount_to_number(match.group(1))
+                if amount and amount >= 0:
+                    extracted['Existing_EMIs'] = amount
+                    break
+        
+        # Loan Term extraction
+        term_patterns = [
+            r'(?:term|duration|years?)\s*(?:is\s*)?(?::|=)?\s*(\d+)\s*(?:years?|yrs?)',
+            r'(\d+)\s*(?:years?|yrs?).*?(?:term|duration)',
+        ]
+        
+        for pattern in term_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                term = int(match.group(1))
+                if 1 <= term <= 7:  # Personal loan specific term range
+                    extracted['Loan_Term_Years'] = term
+                    break
+        
+        # Expected Loan Amount extraction
+        loan_amount_patterns = [
+            r'(?:loan.*?amount|need.*?loan|want.*?loan).*?([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?)',
+            r'([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?).*?(?:loan.*?amount|need.*?loan)',
+        ]
+        
+        for pattern in loan_amount_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                amount = self.convert_amount_to_number(match.group(1))
+                if amount and amount >= 50000:  # Minimum loan amount
+                    extracted['Expected_Loan_Amount'] = amount
+                    break
+        
+        print(f"DEBUG - Fallback extracted: {extracted}")
+        return extracted
+    
+    def convert_amount_to_number(self, amount_str: str) -> float:
+        """Convert lakh/crore amounts to numbers with error handling"""
+        if isinstance(amount_str, (int, float)):
+            return float(amount_str)
+            
+        amount_str = str(amount_str).lower().strip()
+        
+        # Remove currency symbols and extra spaces
+        amount_str = re.sub(r'[₹rs\.\s]+', '', amount_str)
+        
+        # Extract number and unit
+        number_match = re.search(r'([\d,]+(?:\.[\d,]+)?)', amount_str)
+        if not number_match:
+            return 0.0
+        
+        # Remove commas and convert to float
+        number_str = number_match.group(1).replace(',', '')
+        try:
+            number = float(number_str)
+        except ValueError:
+            return 0.0
+        
+        if 'crore' in amount_str:
+            return number * 10000000  # 1 crore = 1,00,00,000
+        elif 'lakh' in amount_str:
+            return number * 100000    # 1 lakh = 1,00,000
+        else:
+            return number
+    
     def validate_field(self, field_name: str, value: Any) -> Tuple[bool, str]:
         """Validate individual field values with strict eligibility criteria"""
         try:
-            if field_name == "Age":
+            if field_name == "Customer_Name":
+                if not value or not str(value).strip():
+                    return False, "Please provide your full name."
+                name = str(value).strip()
+                if len(name) < 2:
+                    return False, "Please provide your complete name."
+                return True, ""
+                
+            elif field_name == "Customer_Email":
+                email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+                if not re.match(email_pattern, str(value)):
+                    return False, "Please provide a valid email address."
+                return True, ""
+                
+            elif field_name == "Customer_Phone":
+                phone_str = str(value).replace(' ', '').replace('-', '').replace('(', '').replace(')', '').replace('+91', '')
+                if not phone_str.isdigit() or len(phone_str) != 10 or phone_str[0] not in '6789':
+                    return False, "Please provide a valid 10-digit mobile number starting with 6, 7, 8, or 9."
+                return True, ""
+                
+            elif field_name == "Age":
                 age = float(value)
                 if age < 21:
                     return False, "INELIGIBLE: You must be at least 21 years old to apply for a personal loan. Unfortunately, we cannot process your application at this time."
                 elif age > 65:
                     return False, "INELIGIBLE: Personal loans are available only for applicants up to 65 years of age. Unfortunately, we cannot process your application at this time."
-                    
+                return True, ""
+                
             elif field_name == "CIBIL_Score":
                 cibil = float(value)
                 if cibil < 650:
                     return False, "INELIGIBLE: A minimum CIBIL score of 650 is required for personal loan approval. Your current score does not meet our eligibility criteria."
                 elif not (300 <= cibil <= 900):
                     return False, "Please provide a valid CIBIL score between 300 and 900. Could you check and confirm your credit score?"
-                    
+                return True, ""
+                
             elif field_name == "Employment_Duration_Years":
                 duration = float(value)
                 if duration < 0:
@@ -124,26 +387,30 @@ Example: {{"Customer_Name": "John Doe", "Age": 35, "Employment_Type": "Salaried"
                     return False, "INELIGIBLE: You must have at least 1 year of employment experience to qualify for a personal loan."
                 elif duration > 45:
                     return False, "Employment duration seems unusually high. Could you please confirm how many years you've been in your current employment type?"
-                    
+                return True, ""
+                
             elif field_name == "Annual_Income":
                 income = float(value)
                 if income <= 0:
                     return False, "Annual income must be a positive amount. Please provide your yearly income."
                 elif income < 200000:  # Minimum 2 lakhs per year
                     return False, "INELIGIBLE: Minimum annual income of ₹2,00,000 is required for personal loan eligibility."
-                elif income > 50000000:  # Maximum 5 crores (reasonable upper limit)
+                elif income > 50000000:  # Maximum 5 crores
                     return False, "Please verify your annual income. The amount seems unusually high. Could you confirm?"
-                    
+                return True, ""
+                
             elif field_name == "Employment_Type":
                 valid_types = ["Self-Employed", "Salaried"]
                 if value not in valid_types:
                     return False, f"Please select your employment type from: {', '.join(valid_types)}. Which category describes your employment?"
-                    
+                return True, ""
+                
             elif field_name == "Loan_Term_Years":
                 term = float(value)
                 if not (1 <= term <= 7):
                     return False, "Loan term must be between 1 and 7 years. Please specify your preferred repayment period."
-                    
+                return True, ""
+                
             elif field_name == "Expected_Loan_Amount":
                 amount = float(value)
                 if amount <= 0:
@@ -152,18 +419,14 @@ Example: {{"Customer_Name": "John Doe", "Age": 35, "Employment_Type": "Salaried"
                     return False, "Minimum loan amount is ₹50,000. Please specify an amount of at least ₹50,000."
                 elif amount > 2000000:
                     return False, "Maximum loan amount is ₹20,00,000. Please specify an amount within this limit."
-                    
+                return True, ""
+                
             elif field_name == "Existing_EMIs":
                 amount = float(value)
                 if amount < 0:
                     return False, "EMI amount cannot be negative. Please provide your current monthly EMI obligations (enter 0 if none)."
-                    
-            elif field_name == "Customer_Phone":
-                # Remove any spaces, dashes, or other characters
-                phone_clean = str(value).replace(" ", "").replace("-", "").replace("(", "").replace(")", "").replace("+91", "")
-                if not phone_clean.isdigit() or len(phone_clean) != 10:
-                    return False, "Please provide a valid 10-digit phone number (e.g., 9876543210)."
-                    
+                return True, ""
+                
             return True, ""
             
         except (ValueError, TypeError):
@@ -277,4 +540,3 @@ Example: {{"Customer_Name": "John Doe", "Age": 35, "Employment_Type": "Salaried"
             import traceback
             traceback.print_exc()
             raise Exception(f"Personal loan prediction failed: {str(e)}")
-    

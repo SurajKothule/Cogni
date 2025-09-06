@@ -18,7 +18,7 @@ class AdminDashboard:
         print("📊 LOAN APPLICATION STATISTICS")
         print("=" * 50)
         
-        loan_types = ["education", "home", "personal", "gold", "business"]
+        loan_types = ["education", "home", "personal", "gold", "business", "car"]
         
         for loan_type in loan_types:
             stats = self.storage_manager.get_application_stats(loan_type)
@@ -84,10 +84,11 @@ class AdminDashboard:
             print("4. View Recent Personal Loan Applications")
             print("5. View Recent Gold Loan Applications")
             print("6. View Recent Business Loan Applications")
-            print("7. Export CSV Reports")
-            print("8. Exit")
+            print("7. View Recent Car Loan Applications")
+            print("8. Export CSV Reports")
+            print("9. Exit")
             
-            choice = input("\nSelect an option (1-8): ").strip()
+            choice = input("\nSelect an option (1-9): ").strip()
             
             if choice == "1":
                 self.display_stats()
@@ -118,11 +119,16 @@ class AdminDashboard:
                 self.display_recent_applications("business", limit)
             
             elif choice == "7":
-                print("\n📊 CSV EXPORT LOCATIONS:")
-                for loan_type in ["education", "home", "personal", "gold", "business"]:
-                    self.export_to_csv(loan_type)
+                limit = input("Number of applications to show (default 5): ").strip()
+                limit = int(limit) if limit.isdigit() else 5
+                self.display_recent_applications("car", limit)
             
             elif choice == "8":
+                print("\n📊 CSV EXPORT LOCATIONS:")
+                for loan_type in ["education", "home", "personal", "gold", "business", "car"]:
+                    self.export_to_csv(loan_type)
+            
+            elif choice == "9":
                 print("\n👋 Goodbye!")
                 break
             

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import { API_CONFIG } from '../../config/api';
 
 export default function AdminApplications() {
   const [applications, setApplications] = useState([]);
@@ -15,7 +16,8 @@ export default function AdminApplications() {
     { key: 'home', name: 'Home', icon: '🏠' },
     { key: 'personal', name: 'Personal', icon: '👤' },
     { key: 'gold', name: 'Gold', icon: '🥇' },
-    { key: 'business', name: 'Business', icon: '💼' }
+    { key: 'business', name: 'Business', icon: '💼' },
+    { key: 'car', name: 'Car', icon: '🚗' }
   ];
 
   useEffect(() => {
@@ -25,7 +27,7 @@ export default function AdminApplications() {
   const fetchApplications = async () => {
     try {
       setLoading(true);
-      const response = await axios.get(`http://localhost:8001/admin/applications/${selectedLoanType}?limit=${limit}`);
+      const response = await axios.get(`${API_CONFIG.BASE_URL}/admin/applications/${selectedLoanType}?limit=${limit}`);
       setApplications(response.data);
       setError(null);
     } catch (err) {

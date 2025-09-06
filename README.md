@@ -1,265 +1,122 @@
-# NextBank - AI-Powered Loan Application System
+# 🏦 CogniBank Loan Application API
 
-A modern, integrated loan application system with professional Next.js frontend and FastAPI backend, supporting multiple loan types with AI-powered chatbot interface.
+A production-ready FastAPI backend for AI-powered loan applications with optional MongoDB integration and local fallback storage.
 
-## 🌟 Key Features
+## 🚀 Features
 
-- **🤖 AI-Powered Chatbot**: Natural conversation flow with instant loan eligibility
-- **🏦 Multi-Loan Support**: Education, Home, and Personal loans
-- **⚡ Real-time Predictions**: Instant loan amount and interest rate calculation
-- **📱 Modern UI**: Professional Next.js frontend with responsive design
-- **📊 Admin Dashboard**: View applications and statistics
-- **🔒 Secure API**: FastAPI backend with comprehensive validation
+- **6 Loan Types**: Education, Home, Personal, Gold, Business, Car
+- **AI-Powered Chat**: OpenAI integration for natural conversations
+- **MongoDB Storage (optional)**: Uses MongoDB Atlas when available, falls back to local storage
+- **Admin Dashboard (CLI)**: View stats, recent applications, and CSV export locations
+- **ML Predictions**: Instant loan eligibility and interest rate calculations
+- **RESTful API**: Clean endpoints for frontend integration
 
-## 🚀 Quick Start
+## ⚡ Quickstart (Backend)
 
-### Integrated Startup (Recommended)
-```bash
-# Run both frontend and backend together
-python start_integrated_app.py
-
-# Or on Windows
-start_integrated_app.bat
-```
-
-### Manual Startup
-```bash
-# Start backend (Terminal 1)
-python loan_app.py
-
-# Start frontend (Terminal 2)
-cd Banking-Marketing-master
-npm install
-npm run dev
-```
-
-## 🌐 Access Points
-
-- **Frontend**: http://localhost:3000 (Next.js Banking Website)
-- **Backend API**: http://localhost:8001
-- **API Documentation**: http://localhost:8001/docs
-- **Admin Dashboard**: `python admin_dashboard.py`
-
-## Project Structure
-
-```
-├── Banking-Marketing-master/    # Next.js Frontend
-│   ├── components/             # React components
-│   │   ├── Chatbot.jsx        # AI loan chatbot
-│   │   ├── Hero.jsx           # Landing page
-│   │   └── Services.jsx       # Banking services
-│   ├── app/                   # Next.js app directory
-│   └── config/                # API configuration
-├── loan_services/             # Backend loan services
-│   ├── base_loan.py          # Abstract base class
-│   ├── education_loan.py     # Education loan logic
-│   ├── home_loan.py          # Home loan logic
-│   ├── personal_loan.py      # Personal loan logic
-│   └── loan_factory.py       # Service factory
-├── customer_data/             # Customer data storage
-├── models/                    # ML models by loan type
-├── loan_app.py               # FastAPI backend
-├── start_integrated_app.py   # Integrated startup script
-└── requirements.txt
-```
-
-## 🔒 Security & Setup
-
-### ⚠️ IMPORTANT: Before GitHub Upload
-
-**NEVER commit these sensitive files:**
-- `.env` - Contains OpenAI API keys
-- `Banking-Marketing-master/.env` - Frontend environment variables
-- `customer_data/*/applications/` - Customer data
-- Any files with API keys or personal information
-
-**Safe files to commit:**
-- `.env.example` - Template without real keys
-- `Banking-Marketing-master/.env.example` - Frontend template
-- All source code files
-- Documentation and setup files
-
-### Setup Instructions
-
-1. **Activate virtual environment:**
-   ```bash
-   fastapi_env\Scripts\activate.bat
-   ```
-
-2. **Install dependencies:**
+1. Create and activate a virtual environment
+   - Windows (PowerShell):
+     ```powershell
+     python -m venv venv
+     .\venv\Scripts\Activate.ps1
+     ```
+   - macOS/Linux:
+     ```bash
+     python3 -m venv venv
+     source venv/bin/activate
+     ```
+2. Install dependencies
    ```bash
    pip install -r requirements.txt
    ```
-
-3. **Environment setup:**
+3. Create a `.env` file (see variables below)
+4. Run the API (default local port: 8001)
    ```bash
-   # Copy template files
-   cp .env.example .env
-   cp Banking-Marketing-master/.env.example Banking-Marketing-master/.env.local
-   
-   # Edit .env and add your actual OpenAI API key
-   OPENAI_API_KEY=your_actual_openai_api_key_here
+   uvicorn loan_app:app --host 0.0.0.0 --port 8001 --reload
    ```
+5. Open API docs: http://localhost:8001/docs
 
-4. **Model files (optional for full ML functionality):**
-   - Education: Place models in `models/education _loan_models/`
-   - Home: Place models in `models/home_loan_models/`
-   - Personal: Place models in `models/personal_loan_models/`
+## 🔧 Environment Variables
 
-📖 **For detailed setup instructions, see [SETUP.md](SETUP.md)**
-
-## Running Applications
-
-### Multi-Loan App (Recommended)
 ```bash
-uvicorn loan_app:app --reload --port 8001
-```
-Or:
-```bash
-python loan_app.py
-```
-**URL:** http://localhost:8001
+# Required for AI chat
+OPENAI_API_KEY=your_openai_api_key
 
-### Education Loan App (Legacy)
-```bash
-uvicorn app:app --reload --port 8000
-```
-**URL:** http://localhost:8000
+# Optional: enable MongoDB storage (falls back to local if not set or connection fails)
+MONGODB_URI=your_mongodb_connection_string
+MONGODB_DATABASE=loan_applications
 
-### Basic App
-```bash
-uvicorn main:app --reload --port 8000
-```
-**URL:** http://localhost:8000
-
-## API Documentation
-
-- **Multi-Loan API:** http://localhost:8001/docs
-- **Education Loan API:** http://localhost:8000/docs
-
-## Loan Types Supported
-
-### 1. Education Loan
-**Fields:** Age, Academic Performance, Course, University Tier, Income, Guarantor Networth, CIBIL Score, etc.
-**Use Case:** Student loans for higher education
-
-### 2. Home Loan  
-**Fields:** Age, Employment Type, Income, Property Value, Property Type, Location, CIBIL Score, etc.
-**Use Case:** Property purchase, construction, renovation
-
-### 3. Personal Loan
-**Fields:** Age, Employment, Income, Company Type, Experience, CIBIL Score, Loan Purpose, etc.
-**Use Case:** Medical, travel, wedding, debt consolidation
-
-## API Endpoints
-
-### Multi-Loan App (`loan_app.py`)
-- `GET /health` - Health check
-- `GET /loan-types` - Get available loan types
-- `POST /chat/start` - Start chat session (specify loan type)
-- `POST /chat/message` - Send message to chatbot
-- `GET /session/{session_id}` - Get session information
-
-### Usage Example
-```python
-# Start a home loan chat with customer info
-POST /chat/start
-{
-  "loan_type": "home",
-  "customer_info": {
-    "name": "John Doe",
-    "email": "john@example.com",
-    "phone": "+91-9876543210"
-  }
-}
-
-# Send messages
-POST /chat/message  
-{
-  "session_id": "abc123",
-  "message": "I want a loan for buying a 2BHK apartment"
-}
+# Port is controlled by your process manager (uvicorn/fly). For local run use 8001.
 ```
 
-## Customer Data Management
+- If MongoDB connection fails, the app automatically uses local storage under `customer_data/`.
 
-### Data Storage Structure
-```
-customer_data/
-├── education/
-│   ├── applications/     # Individual JSON files
-│   └── reports/         # CSV summaries
-├── home/
-│   ├── applications/
-│   └── reports/
-└── personal/
-    ├── applications/
-    └── reports/
-```
+## 📋 API Endpoints (Core)
 
-### Admin Dashboard
+- `GET /health` — Health check
+- `GET /loan-types` — List available loan types and descriptions
+- `POST /chat/start` — Start a loan application chat session
+- `POST /chat/message` — Continue chat in an existing session
+
+Note: Admin features are provided via a local CLI (`admin_dashboard.py`), not HTTP endpoints.
+
+## 🛠️ Admin Dashboard (CLI)
+
+View statistics, recent applications, and CSV export paths using the interactive CLI:
+
 ```bash
 python admin_dashboard.py
 ```
-- View application statistics
-- Browse recent applications
-- Export CSV reports
-- Customer data management
 
-## Features
+- CSV exports are written under `customer_data/<loan_type>/reports/`.
 
-- **Modular Architecture:** Easy to add new loan types
-- **AI-Powered:** Uses OpenAI for natural conversation
-- **ML Predictions:** Loan amount and interest rate predictions
-- **Customer Data Management:** Collects and stores customer information
-- **File Storage:** Organized by loan type with JSON and CSV exports
-- **Admin Dashboard:** View statistics and customer applications
-- **Graceful Degradation:** Works without OpenAI/ML models (limited functionality)
-- **Session Management:** Maintains conversation context
-- **Input Validation:** Handles various number formats (lakhs, crores)
+## 🗂️ Project Structure
 
-## Frontend Interface
+```
+├── loan_services/               # Loan service modules
+│   ├── base_loan.py            # Abstract base class
+│   ├── education_loan.py       # Education loan logic
+│   ├── home_loan.py            # Home loan logic
+│   ├── personal_loan.py        # Personal loan logic
+│   ├── gold_loan.py            # Gold loan logic
+│   ├── business_loan.py        # Business loan logic
+│   ├── car_loan.py             # Car loan logic
+│   └── loan_factory.py         # Service factory
+├── customer_data/               # Data management (local + MongoDB integration)
+│   ├── storage_manager.py      # Local storage
+│   └── mongodb_storage_manager.py # MongoDB storage (optional)
+├── models/                      # ML models by loan type
+├── loan_app.py                  # Main FastAPI application
+├── admin_dashboard.py           # Admin CLI for insights/exports
+├── requirements.txt             # Python dependencies
+├── Banking-Marketing-master/    # Next.js frontend (optional)
+├── Dockerfile                   # Container configuration
+├── fly.toml                     # Fly.io deployment config
+├── SETUP.md                     # Detailed setup (backend + frontend)
+└── DEPLOYMENT.md                # Deployment instructions
+```
 
-A modern chatbot UI is available in the `frontend/` directory.
+## 🎨 Frontend (Optional)
 
-### Quick Start Frontend
+A Next.js frontend is available in `Banking-Marketing-master/`. See `SETUP.md` for instructions to run it against this API (defaults to `http://localhost:8001`).
+
+## 🚀 Deployment
+
+This application is ready for Fly.io. See `DEPLOYMENT.md` for complete instructions.
+
 ```bash
-# Terminal 1: Start backend
-python loan_app.py
-
-# Terminal 2: Start frontend (from frontend/ directory)
-cd frontend
-python server.py
+flyctl deploy --app cognibank-api
 ```
 
-**URLs:**
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:8001
+- Local default port is 8001. In containers/platforms, use the platform-provided port (e.g., Fly.io may map to 8080 internally).
 
-### Frontend Features
-- 🤖 Interactive chatbot interface
-- 🎯 Loan type selection (Education/Home/Personal)
-- 📱 Responsive design for mobile/desktop
-- 📊 Visual prediction results
-- ⚡ Real-time chat with AI assistant
+## 🔒 Security
 
-## Development
+- Keep secrets in `.env` files and never commit them
+- Validate inputs (handled via Pydantic models and service validation)
+- Use HTTPS in production and secure your MongoDB cluster
 
-### Adding New Loan Type
-1. Create new service class inheriting from `BaseLoanService`
-2. Implement required abstract methods
-3. Add to `LoanServiceFactory`
-4. Create model directory structure
-5. Update frontend loan options (optional)
+## 📞 Support
 
-### Project Structure
-```
-├── frontend/              # React-like chatbot UI
-│   ├── index.html        # Main interface
-│   ├── styles.css        # Modern styling
-│   ├── script.js         # Chatbot logic
-│   └── server.py         # Development server
-├── loan_services/        # Modular backend services
-├── models/              # ML models by loan type
-└── *.py                 # FastAPI applications
-```
+- Check `SETUP.md` and `DEPLOYMENT.md`
+- Review API docs at `/docs`
+- Open an issue with logs and steps to reproduce

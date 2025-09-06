@@ -8,7 +8,10 @@ export const API_CONFIG = {
     CHAT_MESSAGE: '/chat/message',
     SESSION_INFO: '/session',
     ADMIN_STATS: '/admin/stats',
-    ADMIN_APPLICATIONS: '/admin/applications'
+    ADMIN_APPLICATIONS: '/admin/applications',
+    ADMIN_EXPORTS: '/admin/exports',
+    ADMIN_EXPORT_DOWNLOAD: '/admin/export',
+    ADMIN_GENERATE_REPORT: '/admin/generate-report'
   }
 };
 

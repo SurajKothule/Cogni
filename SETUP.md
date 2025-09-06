@@ -9,12 +9,14 @@
 ## 🔧 Backend Setup (FastAPI)
 
 ### 1. Clone the Repository
+
 ```bash
 git clone <your-repo-url>
 cd loan-management-system
 ```
 
 ### 2. Create Python Virtual Environment
+
 ```bash
 # Create virtual environment
 python -m venv venv
@@ -27,11 +29,13 @@ source venv/bin/activate
 ```
 
 ### 3. Install Python Dependencies
+
 ```bash
 pip install -r requirements.txt
 ```
 
 ### 4. Environment Configuration
+
 ```bash
 # Copy the example environment file
 cp .env.example .env
@@ -42,6 +46,7 @@ OPENAI_API_KEY=your_actual_openai_api_key_here
 ```
 
 ### 5. Start the Backend Server
+
 ```bash
 # Option 1: Using the start script
 python start_app.py
@@ -58,16 +63,19 @@ The backend will be available at: `http://localhost:8001`
 ## 🎨 Frontend Setup (Next.js)
 
 ### 1. Navigate to Frontend Directory
+
 ```bash
 cd Banking-Marketing-master
 ```
 
 ### 2. Install Node.js Dependencies
+
 ```bash
 npm install
 ```
 
 ### 3. Frontend Environment Configuration
+
 ```bash
 # Copy the example environment file
 cp .env.example .env.local
@@ -80,6 +88,7 @@ NEXT_PUBLIC_APP_VERSION=1.0.0
 ```
 
 ### 4. Start the Frontend Development Server
+
 ```bash
 npm run dev
 ```
@@ -118,6 +127,7 @@ loan-management-system/
 ### ⚠️ IMPORTANT: Never commit sensitive files to Git!
 
 The following files contain sensitive information and are excluded from Git:
+
 - `.env` - Contains API keys and secrets
 - `Banking-Marketing-master/.env` - Frontend environment variables
 - `customer_data/*/applications/` - Customer application data
@@ -126,6 +136,7 @@ The following files contain sensitive information and are excluded from Git:
 ### 🛡️ Environment Variables
 
 Always use environment variables for:
+
 - API keys (OpenAI, Stripe, etc.)
 - Database URLs
 - Secret keys
@@ -134,6 +145,7 @@ Always use environment variables for:
 ## 🧪 Testing
 
 ### Backend Testing
+
 ```bash
 # Test the API endpoints
 python test_backend_api.py
@@ -143,6 +155,7 @@ python -m pytest tests/ -v
 ```
 
 ### Frontend Testing
+
 ```bash
 cd Banking-Marketing-master
 npm test
@@ -153,6 +166,7 @@ npm test
 Access the admin dashboard at: `http://localhost:8001/admin`
 
 Features:
+
 - View loan applications
 - Generate reports
 - Monitor system performance
@@ -161,6 +175,7 @@ Features:
 ## 🚀 Production Deployment
 
 ### Backend Deployment
+
 1. Set up a production server (AWS, GCP, Azure, etc.)
 2. Install Python and dependencies
 3. Set environment variables securely
@@ -168,6 +183,7 @@ Features:
 5. Set up reverse proxy with Nginx
 
 ### Frontend Deployment
+
 1. Build the Next.js application: `npm run build`
 2. Deploy to Vercel, Netlify, or your preferred hosting
 3. Set production environment variables
@@ -178,14 +194,17 @@ Features:
 ### Common Issues
 
 1. **OpenAI API Key Error**
+
    - Ensure your API key is valid and has sufficient credits
    - Check that the key is properly set in the .env file
 
 2. **Port Already in Use**
+
    - Change the port in the startup scripts
    - Kill existing processes using the port
 
 3. **Module Not Found Errors**
+
    - Ensure virtual environment is activated
    - Reinstall dependencies: `pip install -r requirements.txt`
 
@@ -197,6 +216,7 @@ Features:
 ## 📞 Support
 
 For issues and questions:
+
 1. Check the troubleshooting section above
 2. Review the code documentation
 3. Create an issue in the repository
@@ -204,6 +224,7 @@ For issues and questions:
 ## 🎯 Next Steps
 
 After setup:
+
 1. Test all loan types through the frontend
 2. Review the admin dashboard
 3. Customize the ML models for your use case

@@ -1,6 +1,8 @@
 from typing import Dict, List, Any, Tuple
 import pandas as pd
 import numpy as np
+import re
+import json
 from .base_loan import BaseLoanService
 
 class HomeLoanService(BaseLoanService):
@@ -102,57 +104,360 @@ Return ONLY a JSON object with the extracted fields. If no information is found,
 Example: {{"Customer_Name": "John Doe", "Age": 35, "Employment_type": "Salaried", "Income": 80000, "Property_value": 5000000}}
 """.strip()
     
+    def extract_info_from_response(self, user_text: str, conversation: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Extract information from user response with enhanced fallback logic"""
+        print(f"DEBUG - Starting extraction for: '{user_text}'")
+        
+        # Try OpenAI first if available
+        if self.client:
+            extraction_prompt = self.get_extraction_prompt(user_text, conversation)
+            
+            try:
+                resp = self.client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": extraction_prompt}],
+                    temperature=0
+                )
+                extracted_text = resp.choices[0].message.content.strip()
+                m = re.search(r"\{.*\}", extracted_text, re.DOTALL)
+                if m:
+                    extracted = json.loads(m.group())
+                    print(f"DEBUG - OpenAI extracted: {extracted}")
+                    if extracted:  # Only return if we got something useful
+                        return extracted
+            except Exception as e:
+                print(f"DEBUG - OpenAI extraction failed: {e}")
+        
+        # Enhanced fallback extraction
+        return self._enhanced_fallback_extraction(user_text, conversation)
+    
+    def _enhanced_fallback_extraction(self, user_text: str, conversation: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Enhanced fallback extraction with context awareness"""
+        extracted = {}
+        text_lower = user_text.lower().strip()
+        
+        # Get context from last assistant message
+        last_assistant_msg = ""
+        if len(conversation) > 0:
+            for msg in reversed(conversation):
+                if msg.get('role') == 'assistant':
+                    last_assistant_msg = msg.get('content', '').lower()
+                    break
+        
+        # 1. CUSTOMER NAME
+        name_patterns = [
+            r"(?:my name is|i am|i'm|call me|name:|this is)\s+([a-zA-Z\s]{2,30})",
+            r"^([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)\s*$",
+        ]
+        
+        for pattern in name_patterns:
+            match = re.search(pattern, user_text, re.IGNORECASE)
+            if match:
+                name = match.group(1).strip().title()
+                if not any(word in name.lower() for word in ['years', 'old', 'work', 'job', 'score']):
+                    extracted['Customer_Name'] = name
+                    break
+        
+        # Context-aware name extraction
+        if not extracted.get('Customer_Name') and ('name' in last_assistant_msg or 'call you' in last_assistant_msg):
+            words = user_text.strip().split()
+            if 1 <= len(words) <= 3 and all(re.match(r'^[a-zA-Z]+$', word) for word in words):
+                if not any(word.lower() in ['yes', 'no', 'ok', 'sure', 'hello', 'hi'] for word in words):
+                    extracted['Customer_Name'] = user_text.strip().title()
+        
+        # 2. PHONE NUMBER
+        phone_patterns = [
+            r'(?:\+?91[\s-]?)?([6-9]\d{9})',
+            r'(?:phone|mobile|contact|number)[\s:]*(\+?91)?[\s-]*([6-9]\d{9})',
+        ]
+        
+        for pattern in phone_patterns:
+            match = re.search(pattern, user_text)
+            if match:
+                phone = match.group(-1)
+                if len(phone) == 10 and phone[0] in '6789':
+                    extracted['Customer_Phone'] = phone
+                    break
+        
+        # Context-aware phone extraction
+        if not extracted.get('Customer_Phone') and any(word in last_assistant_msg for word in ['phone', 'mobile', 'contact', 'number']):
+            phone_digits = re.sub(r'[^\d]', '', user_text)
+            if len(phone_digits) == 10 and phone_digits[0] in '6789':
+                extracted['Customer_Phone'] = phone_digits
+        
+        # 3. EMAIL
+        email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+        email_match = re.search(email_pattern, user_text)
+        if email_match:
+            extracted['Customer_Email'] = email_match.group(0)
+        
+        # 4. AGE
+        age_patterns = [
+            r'(?:age|years?\s*old|yrs?)\s*(?:is\s*)?(?::|=)?\s*(\d{1,2})',
+            r'(\d{1,2})\s*(?:years?\s*old|yrs?)',
+            r'i am\s*(\d{1,2})'
+        ]
+        
+        for pattern in age_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                age = int(match.group(1))
+                if 21 <= age <= 50:  # Home loan specific age range
+                    extracted['Age'] = age
+                    break
+        
+        # Context-aware age extraction
+        if not extracted.get('Age') and 'age' in last_assistant_msg:
+            age_match = re.search(r'\b(\d{1,2})\b', user_text)
+            if age_match:
+                age = int(age_match.group(1))
+                if 21 <= age <= 50:
+                    extracted['Age'] = age
+        
+        # 5. HOME LOAN SPECIFIC FIELDS
+        
+        # Monthly Income extraction
+        income_patterns = [
+            r'(?:monthly.*?income|salary|earn.*?monthly).*?([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?)',
+            r'([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?).*?(?:monthly.*?income|salary)',
+        ]
+        
+        for pattern in income_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                amount = self.convert_amount_to_number(match.group(1))
+                if amount and amount > 0:
+                    extracted['Income'] = amount
+                    break
+        
+        # Guarantor Income extraction
+        guarantor_patterns = [
+            r'(?:guarantor.*?income|guarantor.*?salary).*?([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?)',
+            r'([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?).*?(?:guarantor.*?income)',
+        ]
+        
+        for pattern in guarantor_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                amount = self.convert_amount_to_number(match.group(1))
+                if amount and amount >= 0:
+                    extracted['Guarantor_income'] = amount
+                    break
+        
+        # CIBIL Score extraction
+        cibil_patterns = [
+            r'(?:cibil|credit.*?score)\s*(?:is\s*)?(?::|=)?\s*(\d{3})',
+            r'(\d{3})\s*(?:cibil|credit.*?score)',
+        ]
+        
+        for pattern in cibil_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                score = int(match.group(1))
+                if 300 <= score <= 900:
+                    extracted['CIBIL_score'] = score
+                    break
+        
+        # Employment Type extraction
+        employment_mapping = {
+            'business': 'Business Owner', 'business owner': 'Business Owner', 'entrepreneur': 'Business Owner',
+            'salaried': 'Salaried', 'employee': 'Salaried', 'job': 'Salaried',
+            'government': 'Government Employee', 'govt': 'Government Employee', 'public sector': 'Government Employee',
+            'self employed': 'Self-Employed', 'self-employed': 'Self-Employed', 'freelance': 'Self-Employed', 'consultant': 'Self-Employed'
+        }
+        
+        for keyword, employment in employment_mapping.items():
+            if keyword in text_lower:
+                extracted['Employment_type'] = employment
+                break
+        
+        # Down Payment extraction
+        down_payment_patterns = [
+            r'(?:down.*?payment|advance).*?([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?)',
+            r'([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?).*?(?:down.*?payment|advance)',
+        ]
+        
+        for pattern in down_payment_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                amount = self.convert_amount_to_number(match.group(1))
+                if amount and amount >= 0:
+                    extracted['Down_payment'] = amount
+                    break
+        
+        # Existing EMI extraction
+        emi_patterns = [
+            r'(?:existing.*?emi|current.*?emi).*?([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?)',
+            r'([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?).*?(?:emi.*?payment)',
+        ]
+        
+        for pattern in emi_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                amount = self.convert_amount_to_number(match.group(1))
+                if amount and amount >= 0:
+                    extracted['Existing_total_EMI'] = amount
+                    break
+        
+        # Loan Amount extraction
+        loan_amount_patterns = [
+            r'(?:loan.*?amount|need.*?loan|want.*?loan).*?([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?)',
+            r'([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?).*?(?:loan.*?amount|need.*?loan)',
+        ]
+        
+        for pattern in loan_amount_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                amount = self.convert_amount_to_number(match.group(1))
+                if amount and amount > 0:
+                    extracted['Loan_amount_requested'] = amount
+                    break
+        
+        # Property Value extraction
+        property_patterns = [
+            r'(?:property.*?value|house.*?value|home.*?price).*?([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?)',
+            r'([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?).*?(?:property.*?value|house.*?price)',
+        ]
+        
+        for pattern in property_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                amount = self.convert_amount_to_number(match.group(1))
+                if amount and amount > 0:
+                    extracted['Property_value'] = amount
+                    break
+        
+        # Tenure extraction
+        tenure_patterns = [
+            r'(?:tenure|duration|years?)\s*(?:is\s*)?(?::|=)?\s*(\d+)\s*(?:years?|yrs?)',
+            r'(\d+)\s*(?:years?|yrs?).*?(?:tenure|duration)',
+        ]
+        
+        for pattern in tenure_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                tenure = int(match.group(1))
+                if 5 <= tenure <= 30:  # Home loan specific tenure range
+                    extracted['Tenure'] = tenure
+                    break
+        
+        print(f"DEBUG - Fallback extracted: {extracted}")
+        return extracted
+    
+    def convert_amount_to_number(self, amount_str: str) -> float:
+        """Convert lakh/crore amounts to numbers with error handling"""
+        if isinstance(amount_str, (int, float)):
+            return float(amount_str)
+            
+        amount_str = str(amount_str).lower().strip()
+        
+        # Remove currency symbols and extra spaces
+        amount_str = re.sub(r'[₹rs\.\s]+', '', amount_str)
+        
+        # Extract number and unit
+        number_match = re.search(r'([\d,]+(?:\.[\d,]+)?)', amount_str)
+        if not number_match:
+            return 0.0
+        
+        # Remove commas and convert to float
+        number_str = number_match.group(1).replace(',', '')
+        try:
+            number = float(number_str)
+        except ValueError:
+            return 0.0
+        
+        if 'crore' in amount_str:
+            return number * 10000000  # 1 crore = 1,00,00,000
+        elif 'lakh' in amount_str:
+            return number * 100000    # 1 lakh = 1,00,000
+        else:
+            return number
+    
     def validate_field(self, field_name: str, value: Any) -> Tuple[bool, str]:
         """Validate individual field values with user-friendly messages"""
         try:
-            if field_name == "Age":
+            if field_name == "Customer_Name":
+                if not value or not str(value).strip():
+                    return False, "Please provide your full name."
+                name = str(value).strip()
+                if len(name) < 2:
+                    return False, "Please provide your complete name."
+                return True, ""
+                
+            elif field_name == "Customer_Email":
+                email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+                if not re.match(email_pattern, str(value)):
+                    return False, "Please provide a valid email address."
+                return True, ""
+                
+            elif field_name == "Customer_Phone":
+                phone_str = str(value).replace(' ', '').replace('-', '').replace('(', '').replace(')', '').replace('+91', '')
+                if not phone_str.isdigit() or len(phone_str) != 10 or phone_str[0] not in '6789':
+                    return False, "Please provide a valid 10-digit mobile number starting with 6, 7, 8, or 9."
+                return True, ""
+                
+            elif field_name == "Age":
                 age = float(value)
                 if not (21 <= age <= 50):
                     return False, "I need your age to be between 21 and 50 years for home loan eligibility. Could you please confirm your age?"
-                    
+                return True, ""
+                
             elif field_name == "CIBIL_score":
                 cibil = float(value)
                 if cibil < 650:
                     return False, "Sorry, for home loans we require a minimum CIBIL score of 650. Unfortunately, your current score doesn't meet our eligibility criteria."
                 elif not (300 <= cibil <= 900):
                     return False, "Your CIBIL score should be between 300 and 900. Could you please check and provide your correct credit score?"
-                    
+                return True, ""
+                
             elif field_name == "Employment_type":
                 valid_types = ["Business Owner", "Salaried", "Government Employee", "Self-Employed"]
                 if value not in valid_types:
                     return False, f"For employment type, please choose from: {', '.join(valid_types)}. Which category best describes your employment?"
-                    
+                return True, ""
+                
             elif field_name == "Tenure":
                 tenure = float(value)
                 if not (5 <= tenure <= 30):
                     return False, "Loan tenure should be between 5 and 30 years. How many years would you like to repay the loan?"
-                    
+                return True, ""
+                
             elif field_name == "Income":
                 amount = float(value)
                 if amount <= 0:
                     return False, "Could you please tell me your monthly income? This helps me calculate your loan eligibility."
-                    
+                return True, ""
+                
             elif field_name == "Property_value":
                 amount = float(value)
                 if amount <= 0:
                     return False, "What's the total value of the property you're planning to purchase? This is important for calculating your loan amount."
-                    
+                return True, ""
+                
             elif field_name == "Loan_amount_requested":
                 amount = float(value)
                 if amount <= 0:
                     return False, "How much loan amount are you looking for? Please share your expected loan requirement."
-                    
+                return True, ""
+                
             elif field_name == "Down_payment":
                 amount = float(value)
                 if amount < 0:
                     return False, "How much can you pay as down payment? Even if it's zero, please let me know."
-                    
-            elif field_name == "Customer_Phone":
-                # Remove any spaces, dashes, or other characters
-                phone_clean = str(value).replace(" ", "").replace("-", "").replace("(", "").replace(")", "").replace("+91", "")
-                if not phone_clean.isdigit() or len(phone_clean) != 10:
-                    return False, "Invalid phone number! Please provide exactly 10 digits (e.g., 9876543210). Your phone number should not contain any letters or special characters."
-                    
+                return True, ""
+                
+            elif field_name == "Guarantor_income":
+                amount = float(value)
+                if amount < 0:
+                    return False, "Guarantor income cannot be negative. Please provide the guarantor's monthly income (enter 0 if no guarantor)."
+                return True, ""
+                
+            elif field_name == "Existing_total_EMI":
+                amount = float(value)
+                if amount < 0:
+                    return False, "Existing EMI cannot be negative. Please provide your current monthly EMI obligations (enter 0 if none)."
+                return True, ""
+                
             return True, ""
             
         except (ValueError, TypeError):

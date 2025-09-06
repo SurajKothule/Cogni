@@ -107,7 +107,7 @@ const Chatbot = ({ onClose }) => {
           loan_type: loanType,
         },
         {
-          timeout: 15000, // 15 second timeout for starting session
+          timeout: 150000, // 15 second timeout for starting session
           headers: {
             'Content-Type': 'application/json'
           }
@@ -171,19 +171,19 @@ const Chatbot = ({ onClose }) => {
           if (result.status === "APPROVED") {
             // Full approval - customer gets what they asked for
             resultMessage = `
-🎉 **Great News! You're Pre-Approved for ${loanTypeName} Loan**
+Great News! You're Pre-Approved for ${loanTypeName} Loan
 
-✅ **YES! You are eligible for ₹${requestedAmount.toLocaleString()} at ${
+YES! You are eligible for ₹${requestedAmount.toLocaleString()} at ${
               result.interest_rate
-            }% per annum**
+            }% per annum
 
-🚀 **What's Next:**
+What's Next:
 • Your loan application is pre-approved
 • Competitive interest rate of ${result.interest_rate}% per annum
 • Quick processing and minimal documentation
 • Our relationship manager will contact you within 24 hours
 
-💼 **Why Choose Us:**
+Why Choose Us:
 • Fastest loan processing in the industry
 • Transparent pricing with no hidden charges
 • Dedicated customer support throughout the process
@@ -193,24 +193,24 @@ Ready to proceed? Our team will reach out to you soon!
           } else {
             // Partial approval - offer what they can get
             resultMessage = `
-💡 **Good News! You're Eligible for ${loanTypeName} Loan**
+Good News! You're Eligible for ${loanTypeName} Loan
 
-✅ **You can get up to ₹${eligibleAmount.toLocaleString()} at ${
+You can get up to ₹${eligibleAmount.toLocaleString()} at ${
               result.interest_rate
-            }% per annum**
+            }% per annum
 
-📊 **Your Application Summary:**
+Your Application Summary:
 • Requested Amount: ₹${requestedAmount.toLocaleString()}
 • Approved Amount: ₹${eligibleAmount.toLocaleString()}
 • Interest Rate: ${result.interest_rate}% per annum
 
-🎯 **Special Benefits:**
+Special Benefits:
 • Pre-approved loan offer valid for 30 days
 • Flexible repayment options available
 • Option to reapply for higher amount after 6 months
 • Priority processing for existing customers
 
-💬 **Want to discuss your options?** Our loan specialist will call you to explore ways to maximize your loan amount.
+Want to discuss your options? Our loan specialist will call you to explore ways to maximize your loan amount.
 
 Our team will contact you within 24 hours to proceed!
             `;
@@ -385,42 +385,45 @@ Our team will contact you within 24 hours to proceed!
       
 
       {/* Input Area */}
-      <div className="px-4 py-3 bg-white border-t border-gray-200">
-        <div className="flex items-center space-x-3">
-          <input
-            type="text"
-            value={inputMessage}
-            onChange={(e) => setInputMessage(e.target.value)}
-            onKeyPress={handleKeyPress}
-            placeholder={
-              sessionId
-                ? "Tell me about your loan requirements..."
-                : "Type your message or select a loan type..."
-            }
-            disabled={isLoading}
-            className="flex-1 px-4 py-3 text-sm border text-gray-500 border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-[#000048]/20 focus:border-[#000048] disabled:opacity-50"
-          />
-          <button
-            onClick={handleSendMessage}
-            disabled={!inputMessage.trim() || isLoading}
-            className="p-3 bg-[#000048] text-white rounded-full hover:bg-[#000048]/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
-          >
-            <svg
-              className="w-5 h-5 transform rotate-45"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
-              />
-            </svg>
-          </button>
-        </div>
-      </div>
+      {/* Input Area */}
+<div className="px-4 py-3 bg-white border-t border-gray-200">
+  <div className="flex items-center space-x-3">
+    <input
+      type="text"
+      value={inputMessage}
+      onChange={(e) => setInputMessage(e.target.value)}
+      onKeyPress={handleKeyPress}
+      placeholder={
+        sessionId
+          ? "Tell me about your loan requirements..."
+          : "Type your message or select a loan type..."
+      }
+      disabled={isLoading}
+      autoFocus // This keeps the input focused
+      className="flex-1 px-4 py-3 text-sm border text-gray-500 border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-[#000048]/20 focus:border-[#000048] disabled:opacity-50"
+      ref={input => input && input.focus()} // Additional focus management
+    />
+    <button
+      onClick={handleSendMessage}
+      disabled={!inputMessage.trim() || isLoading}
+      className="p-3 bg-[#000048] text-white rounded-full hover:bg-[#000048]/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
+    >
+      <svg
+        className="w-5 h-5 transform rotate-45"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
+        />
+      </svg>
+    </button>
+  </div>
+</div>
     </div>
   );
 };

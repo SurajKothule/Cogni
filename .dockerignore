@@ -1,0 +1,91 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+README.md
+*.md
+
+# Test files
+test_*.py
+*_test.py
+tests/
+
+# Frontend (not needed for backend)
+Banking-Marketing-master/
+node_modules/
+*.json
+*.jsx
+*.js
+*.mjs
+*.css
+*.html
+
+# Local development files
+.env.local
+.env.development
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+
+# Pytest
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# Fly.io
+.fly/
+
+# Documentation (not needed in container)
+*.md
+DEPLOYMENT.md
+README.md
+
+# Development files
+.env.production
+deploy.sh
+
+# Customer data (will be created at runtime)
+customer_data/*/applications/*
+customer_data/*/reports/*

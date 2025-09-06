@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import pickle
 import re
+import json
 from .base_loan import BaseLoanService
 
 class CarLoanService(BaseLoanService):
@@ -59,12 +60,98 @@ Guidelines:
 6) For categorical fields, provide the exact options to choose from.
 7) When you have ALL information, say exactly: INFORMATION_COMPLETE
 8) Do NOT provide loan predictions - only collect information professionally.
+9) VARY your responses - don't use the same greeting or acknowledgment repeatedly.
+10) Make the conversation engaging and natural.
 
 Start by introducing yourself as a car loan specialist."""
     
     def get_fallback_greeting(self) -> str:
-        return "Hello! I'm a car loan specialist here to help you with your car loan application. Car loans can help you purchase your dream vehicle with flexible repayment options. Let's start with your full name - what should I call you?"
+        greetings = [
+            "Hello! I'm a car loan specialist here to help you with your car loan application. Car loans can help you purchase your dream vehicle with flexible repayment options. Let's start with your full name - what should I call you?",
+            "Hi there! I'm excited to help you with your car loan journey. Getting the right financing can make your dream car a reality. May I know your name to get started?",
+            "Welcome! As your car loan advisor, I'm here to guide you through the application process. Let's begin with your name - what would you like me to call you?",
+            "Greetings! I specialize in car loans and I'm here to assist you in finding the perfect financing option. Could you share your name with me to get started?"
+        ]
+        return np.random.choice(greetings)
     
+    def get_conversation_prompt(self, current_field: str, collected_data: Dict[str, Any], conversation: List[Dict[str, str]]) -> str:
+        """Generate dynamic conversation prompts using OpenAI"""
+        field_descriptions = {
+            "Customer_Name": "full name",
+            "Customer_Email": "email address",
+            "Customer_Phone": "10-digit phone number",
+            "Age": "age in years (18-80)",
+            "applicant_annual_salary": "annual salary in INR",
+            "Coapplicant_Annual_Income": "co-applicant's annual income in INR (0 if none)",
+            "CIBIL": "CIBIL credit score (300-900)",
+            "Car_Type": "car type (Sedan, SUV, Hatchback, or Coupe)",
+            "down_payment_percent": "down payment percentage (10-50%)",
+            "Tenure": "loan tenure in years (1-7)",
+            "loan_amount": "desired loan amount in INR"
+        }
+        
+        prompt = f"""
+You are a friendly car loan specialist having a natural conversation with a customer.
+
+Collected information so far:
+{json.dumps(collected_data, indent=2)}
+
+Current conversation history (last 3 messages):
+{conversation[-3:] if len(conversation) > 3 else conversation}
+
+Next field to collect: {current_field} ({field_descriptions[current_field]})
+
+Guidelines:
+1. Be warm, professional, and engaging
+2. Acknowledge what you've collected so far naturally
+3. Ask for the next field in a conversational way
+4. Vary your phrasing - don't repeat the same patterns
+5. Provide context if needed (e.g., explain what CIBIL score is)
+6. Keep it concise (1-2 sentences)
+7. Make it feel like a natural human conversation
+
+Generate ONLY the next message to ask for {current_field}. Do not include any other text.
+""".strip()
+        
+        return prompt
+    
+    def generate_conversational_message(self, current_field: str, collected_data: Dict[str, Any], conversation: List[Dict[str, str]]) -> str:
+        """Generate dynamic conversational messages using OpenAI"""
+        if not self.client:
+            # Fallback to simple messages if OpenAI is not available
+            fallback_messages = {
+                "Customer_Name": "Could you please tell me your full name?",
+                "Customer_Email": "May I have your email address?",
+                "Customer_Phone": "What's your 10-digit phone number?",
+                "Age": "How old are you?",
+                "applicant_annual_salary": "What's your annual salary?",
+                "Coapplicant_Annual_Income": "Does your co-applicant have any annual income?",
+                "CIBIL": "What's your CIBIL credit score?",
+                "Car_Type": "What type of car are you interested in?",
+                "down_payment_percent": "What percentage down payment can you make?",
+                "Tenure": "How many years would you like for the loan tenure?",
+                "loan_amount": "How much loan amount are you looking for?"
+            }
+            return fallback_messages.get(current_field, f"Could you provide your {current_field.replace('_', ' ').lower()}?")
+        
+        try:
+            prompt = self.get_conversation_prompt(current_field, collected_data, conversation)
+            
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.8,  # Higher temperature for more varied responses
+                max_tokens=100
+            )
+            
+            message = response.choices[0].message.content.strip()
+            return message
+            
+        except Exception as e:
+            print(f"OpenAI conversation generation failed: {e}")
+            # Fallback to simple message
+            return f"Could you please provide your {current_field.replace('_', ' ').lower()}?"
+
     def get_extraction_prompt(self, user_text: str, conversation: List[Dict[str, str]]) -> str:
         return f"""
 Based on the conversation history and the user's latest response, extract any car loan-related information.
@@ -99,80 +186,11 @@ Return ONLY a JSON object with the extracted fields. If no information is found,
 Example: {{"Customer_Name": "John Doe", "Age": 30, "applicant_annual_salary": 800000, "Car_Type": "Sedan", "CIBIL": 750}}
 """.strip()
     
-    def validate_field(self, field_name: str, value: Any) -> Tuple[bool, str]:
-        """Validate individual field values with strict eligibility criteria"""
-        try:
-            if field_name == "Age":
-                age = float(value)
-                if age < 18:
-                    return False, "INELIGIBLE: You must be at least 18 years old to apply for a car loan."
-                elif age > 80:
-                    return False, "INELIGIBLE: Maximum age limit for car loan is 80 years."
-                    
-            elif field_name == "CIBIL":
-                cibil = float(value)
-                if cibil < 650:
-                    return False, "INELIGIBLE: A minimum CIBIL score of 650 is required for car loan approval. Your current score does not meet our eligibility criteria."
-                elif not (300 <= cibil <= 900):
-                    return False, "Please provide a valid CIBIL score between 300 and 900. Could you check and confirm your credit score?"
-                    
-            elif field_name == "applicant_annual_salary":
-                salary = float(value)
-                if salary <= 0:
-                    return False, "Annual salary must be a positive amount. Please provide your yearly salary."
-                elif salary < 300000:  # Minimum 3 lakhs per year
-                    return False, "INELIGIBLE: Minimum annual salary of ₹3,00,000 is required for car loan eligibility."
-                elif salary > 100000000:  # Maximum 10 crores (reasonable upper limit)
-                    return False, "Please verify your annual salary. The amount seems unusually high. Could you confirm your yearly income?"
-                    
-            elif field_name == "Coapplicant_Annual_Income":
-                income = float(value)
-                if income < 0:
-                    return False, "Co-applicant income cannot be negative. Please provide the co-applicant's yearly income (enter 0 if no co-applicant)."
-                elif income > 100000000:  # Maximum 10 crores
-                    return False, "Please verify the co-applicant's income. The amount seems unusually high."
-                    
-
-                    
-            elif field_name == "Car_Type":
-                valid_types = ["Sedan", "SUV", "Hatchback", "Coupe"]
-                if value not in valid_types:
-                    return False, f"Please select your car type from: {', '.join(valid_types)}. Which type of car are you planning to purchase?"
-                    
-            elif field_name == "down_payment_percent":
-                percent = float(value)
-                if not (10 <= percent <= 50):
-                    return False, "Down payment percentage must be between 10% and 50%. Please specify your down payment percentage."
-                    
-            elif field_name == "Tenure":
-                tenure = float(value)
-                if not (1 <= tenure <= 7):
-                    return False, "Car loan tenure must be between 1 and 7 years. Please specify your preferred repayment period."
-                    
-            elif field_name == "loan_amount":
-                amount = float(value)
-                if amount <= 0:
-                    return False, "Loan amount must be a positive amount. Please specify how much loan you need."
-                elif amount < 100000:  # Minimum 1 lakh
-                    return False, "INELIGIBLE: Minimum loan amount is ₹1,00,000 for car loans."
-                elif amount > 50000000:  # Maximum 5 crores
-                    return False, "Please verify your loan requirement. The amount seems unusually high for a car loan. Could you confirm the loan amount needed?"
-                    
-            elif field_name == "Customer_Phone":
-                # Remove any spaces, dashes, or other characters
-                phone_clean = str(value).replace(" ", "").replace("-", "").replace("(", "").replace(")", "").replace("+91", "")
-                if not phone_clean.isdigit() or len(phone_clean) != 10:
-                    return False, "Please provide a valid 10-digit phone number (e.g., 9876543210)."
-                    
-            return True, ""
-            
-        except (ValueError, TypeError):
-            field_display = field_name.replace('_', ' ').lower()
-            return False, f"Please provide a valid {field_display} in the correct format."
-
     def extract_info_from_response(self, user_text: str, conversation: List[Dict[str, str]]) -> Dict[str, Any]:
-        """Extract information from user response with car loan-specific fallback logic"""
-        # Try OpenAI first
+        """Extract information from user response with enhanced fallback logic"""
+        print(f"DEBUG - Starting extraction for: '{user_text}'")
+        
+        # Try OpenAI first if available
         if self.client:
             extraction_prompt = self.get_extraction_prompt(user_text, conversation)
             
@@ -180,66 +198,86 @@ Example: {{"Customer_Name": "John Doe", "Age": 30, "applicant_annual_salary": 80
                 resp = self.client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[{"role": "user", "content": extraction_prompt}],
-                    temperature=0,
-                    timeout=8  # 8 second timeout for extraction
+                    temperature=0
                 )
                 extracted_text = resp.choices[0].message.content.strip()
-                import json
                 m = re.search(r"\{.*\}", extracted_text, re.DOTALL)
                 if m:
-                    return json.loads(m.group())
+                    extracted = json.loads(m.group())
+                    print(f"DEBUG - OpenAI extracted: {extracted}")
+                    if extracted:  # Only return if we got something useful
+                        return extracted
             except Exception as e:
-                print(f"OpenAI extraction failed: {e}")
+                print(f"DEBUG - OpenAI extraction failed: {e}")
         
-        # Fallback extraction logic
+        # Enhanced fallback extraction
+        return self._enhanced_fallback_extraction(user_text, conversation)
+    
+    def _enhanced_fallback_extraction(self, user_text: str, conversation: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Enhanced fallback extraction with context awareness"""
         extracted = {}
-        text_lower = user_text.lower()
+        text_lower = user_text.lower().strip()
         
-        # Extract name
+        # Get context from last assistant message
+        last_assistant_msg = ""
+        if len(conversation) > 0:
+            for msg in reversed(conversation):
+                if msg.get('role') == 'assistant':
+                    last_assistant_msg = msg.get('content', '').lower()
+                    break
+        
+        # 1. CUSTOMER NAME
         name_patterns = [
-            r'my name is ([a-zA-Z\s]+)',
-            r'i am ([a-zA-Z\s]+)',
-            r'i\'m ([a-zA-Z\s]+)',
-            r'call me ([a-zA-Z\s]+)'
+            r"(?:my name is|i am|i'm|call me|name:|this is)\s+([a-zA-Z\s]{2,30})",
+            r"^([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)\s*$",
         ]
         
         for pattern in name_patterns:
-            match = re.search(pattern, text_lower)
+            match = re.search(pattern, user_text, re.IGNORECASE)
             if match:
                 name = match.group(1).strip().title()
-                if len(name) > 1 and not any(char.isdigit() for char in name):
+                if not any(word in name.lower() for word in ['years', 'old', 'work', 'job', 'score']):
                     extracted['Customer_Name'] = name
                     break
         
-        # Extract email
-        email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-        email_match = re.search(email_pattern, user_text)
-        if email_match:
-            extracted['Customer_Email'] = email_match.group()
+        # Context-aware name extraction
+        if not extracted.get('Customer_Name') and ('name' in last_assistant_msg or 'call you' in last_assistant_msg):
+            words = user_text.strip().split()
+            if 1 <= len(words) <= 3 and all(re.match(r'^[a-zA-Z]+$', word) for word in words):
+                if not any(word.lower() in ['yes', 'no', 'ok', 'sure', 'hello', 'hi'] for word in words):
+                    extracted['Customer_Name'] = user_text.strip().title()
         
-        # Extract phone
+        # 2. PHONE NUMBER
         phone_patterns = [
-            r'(\+91[\s-]?)?([6-9]\d{9})',
-            r'(\d{10})',
-            r'(\d{3}[\s-]\d{3}[\s-]\d{4})'
+            r'(?:\+?91[\s-]?)?([6-9]\d{9})',
+            r'(?:phone|mobile|contact|number)[\s:]*(\+?91)?[\s-]*([6-9]\d{9})',
         ]
         
         for pattern in phone_patterns:
             match = re.search(pattern, user_text)
             if match:
-                phone = re.sub(r'[^\d]', '', match.group())
-                if phone.startswith('91') and len(phone) == 12:
-                    phone = phone[2:]
+                phone = match.group(-1)
                 if len(phone) == 10 and phone[0] in '6789':
                     extracted['Customer_Phone'] = phone
                     break
         
-        # Extract age
+        # Context-aware phone extraction
+        if not extracted.get('Customer_Phone') and any(word in last_assistant_msg for word in ['phone', 'mobile', 'contact', 'number']):
+            phone_digits = re.sub(r'[^\d]', '', user_text)
+            if len(phone_digits) == 10 and phone_digits[0] in '6789':
+                extracted['Customer_Phone'] = phone_digits
+        
+        # 3. EMAIL
+        email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+        email_match = re.search(email_pattern, user_text)
+        if email_match:
+            extracted['Customer_Email'] = email_match.group(0)
+        
+        # 4. AGE
         age_patterns = [
-            r'i am (\d+) years? old',
-            r'my age is (\d+)',
-            r'age.*?(\d+)',
-            r'(\d+)\s+years?\s+old'
+            r'(?:age|years?\s*old|yrs?)\s*(?:is\s*)?(?::|=)?\s*(\d{1,2})',
+            r'(\d{1,2})\s*(?:years?\s*old|yrs?)',
+            r'i am\s*(\d{1,2})'
         ]
         
         for pattern in age_patterns:
@@ -250,74 +288,37 @@ Example: {{"Customer_Name": "John Doe", "Age": 30, "applicant_annual_salary": 80
                     extracted['Age'] = age
                     break
         
-        # Check what the last assistant message was asking for
-        last_assistant_msg = ""
-        if len(conversation) > 0:
-            for msg in reversed(conversation):
-                if msg.get('role') == 'assistant':
-                    last_assistant_msg = msg.get('content', '').lower()
-                    break
+        # Context-aware age extraction
+        if not extracted.get('Age') and 'age' in last_assistant_msg:
+            age_match = re.search(r'\b(\d{1,2})\b', user_text)
+            if age_match:
+                age = int(age_match.group(1))
+                if 18 <= age <= 80:
+                    extracted['Age'] = age
         
-        # Extract salary/income with lakh/crore conversion
-        def convert_amount(amount_str):
-            """Convert lakh/crore amounts to numbers"""
-            amount_str = amount_str.lower().strip()
-            
-            # Extract number and unit - handle commas in numbers
-            number_match = re.search(r'([\d,]+(?:\.[\d,]+)?)', amount_str)
-            if not number_match:
-                return None
-            
-            # Remove commas and convert to float
-            number_str = number_match.group(1).replace(',', '')
-            try:
-                number = float(number_str)
-            except ValueError:
-                return None
-            
-            if 'crore' in amount_str:
-                return int(number * 10000000)  # 1 crore = 1,00,00,000
-            elif 'lakh' in amount_str:
-                return int(number * 100000)    # 1 lakh = 1,00,000
-            else:
-                return int(number)
+        # 5. CAR LOAN SPECIFIC FIELDS
         
-        # Extract salary patterns
+        # Salary/Income extraction with conversion
         salary_patterns = [
-            r'salary.*?([\d,]+(?:\.[\d,]+)?\s*(?:lakh|crore|lakhs|crores)?)',
-            r'earn.*?([\d,]+(?:\.[\d,]+)?\s*(?:lakh|crore|lakhs|crores)?)',
-            r'income.*?([\d,]+(?:\.[\d,]+)?\s*(?:lakh|crore|lakhs|crores)?)',
-            r'([\d,]+(?:\.[\d,]+)?\s*(?:lakh|crore|lakhs|crores)?).*?salary'
+            r'(?:salary|income|earn).*?([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?)',
+            r'([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?).*?(?:salary|income|monthly)',
         ]
         
         for pattern in salary_patterns:
             match = re.search(pattern, text_lower)
             if match:
-                amount = convert_amount(match.group(1))
-                if amount and amount >= 300000:  # Minimum reasonable salary
+                amount = self.convert_amount_to_number(match.group(1))
+                if amount and amount >= 300000:
                     if 'co' in last_assistant_msg or 'coapplicant' in last_assistant_msg:
                         extracted['Coapplicant_Annual_Income'] = amount
                     else:
                         extracted['applicant_annual_salary'] = amount
                     break
         
-        # If asking about salary and user just gives amount
-        if any(word in last_assistant_msg for word in ['salary', 'income', 'earn']):
-            amount_match = re.search(r'([\d,]+(?:\.[\d,]+)?\s*(?:lakh|crore|lakhs|crores)?)', text_lower)
-            if amount_match:
-                amount = convert_amount(amount_match.group(1))
-                if amount and amount >= 100000:
-                    if 'co' in last_assistant_msg or 'coapplicant' in last_assistant_msg:
-                        extracted['Coapplicant_Annual_Income'] = amount
-                    else:
-                        extracted['applicant_annual_salary'] = amount
-        
-        # Extract CIBIL score
+        # CIBIL score
         cibil_patterns = [
-            r'cibil.*?(\d{3})',
-            r'credit.*?score.*?(\d{3})',
-            r'(\d{3}).*?cibil',
-            r'(\d{3}).*?credit.*?score'
+            r'(?:cibil|credit.*?score)\s*(?:is\s*)?(?::|=)?\s*(\d{3})',
+            r'(\d{3})\s*(?:cibil|credit.*?score)',
         ]
         
         for pattern in cibil_patterns:
@@ -328,26 +329,22 @@ Example: {{"Customer_Name": "John Doe", "Age": 30, "applicant_annual_salary": 80
                     extracted['CIBIL'] = score
                     break
         
-        # Employment type is not collected from user but will use default in model
-        
-        # Extract car type
-        car_type_map = {
-            'sedan': 'Sedan',
-            'suv': 'SUV',
-            'hatchback': 'Hatchback',
-            'coupe': 'Coupe'
+        # Car type extraction
+        car_type_mapping = {
+            'sedan': 'Sedan', 'suv': 'SUV', 'hatchback': 'Hatchback', 'coupe': 'Coupe',
+            'maruti': 'Hatchback', 'hyundai': 'Sedan', 'tata': 'SUV', 'honda': 'Sedan',
+            'swift': 'Hatchback', 'city': 'Sedan', 'creta': 'SUV', 'nexon': 'SUV'
         }
         
-        for key, value in car_type_map.items():
-            if key in text_lower:
-                extracted['Car_Type'] = value
+        for keyword, car_type in car_type_mapping.items():
+            if keyword in text_lower:
+                extracted['Car_Type'] = car_type
                 break
         
-        # Extract down payment percentage
+        # Down payment percentage
         down_payment_patterns = [
-            r'down.*?payment.*?(\d+)%',
-            r'(\d+)%.*?down.*?payment',
-            r'down.*?(\d+)\s*percent'
+            r'(?:down.*?payment|advance).*?(\d+)\s*(?:%|percent|percentage)',
+            r'(\d+)\s*(?:%|percent|percentage).*?(?:down.*?payment|advance)',
         ]
         
         for pattern in down_payment_patterns:
@@ -358,12 +355,10 @@ Example: {{"Customer_Name": "John Doe", "Age": 30, "applicant_annual_salary": 80
                     extracted['down_payment_percent'] = percent
                     break
         
-        # Extract tenure
+        # Tenure extraction
         tenure_patterns = [
-            r'(\d+)\s+years?.*?tenure',
-            r'tenure.*?(\d+)\s+years?',
-            r'(\d+)\s+years?.*?loan',
-            r'repay.*?(\d+)\s+years?'
+            r'(?:tenure|duration|period).*?(\d+)\s*(?:years?|yrs?)',
+            r'(\d+)\s*(?:years?|yrs?).*?(?:tenure|duration|period)',
         ]
         
         for pattern in tenure_patterns:
@@ -374,31 +369,143 @@ Example: {{"Customer_Name": "John Doe", "Age": 30, "applicant_annual_salary": 80
                     extracted['Tenure'] = tenure
                     break
         
-        # Extract loan amount
+        # Loan amount extraction
         loan_amount_patterns = [
-            r'need.*?([\d,]+(?:\.[\d,]+)?\s*(?:lakh|crore|lakhs|crores)?)',
-            r'want.*?([\d,]+(?:\.[\d,]+)?\s*(?:lakh|crore|lakhs|crores)?)',
-            r'loan.*?amount.*?([\d,]+(?:\.[\d,]+)?\s*(?:lakh|crore|lakhs|crores)?)',
-            r'([\d,]+(?:\.[\d,]+)?\s*(?:lakh|crore|lakhs|crores)?).*?loan'
+            r'(?:loan.*?amount|need.*?loan|want.*?loan).*?([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?)',
+            r'([\d,]+(?:\.[\d,]+)?\s*(?:lakh|lakhs|crore|crores)?).*?(?:loan.*?amount|need.*?loan)',
         ]
         
         for pattern in loan_amount_patterns:
             match = re.search(pattern, text_lower)
             if match:
-                amount = convert_amount(match.group(1))
-                if amount and amount >= 100000:  # Minimum 1 lakh
+                amount = self.convert_amount_to_number(match.group(1))
+                if amount and amount >= 100000:
                     extracted['loan_amount'] = amount
                     break
         
-        # If asking about loan amount and user just gives amount
-        if any(word in last_assistant_msg for word in ['loan amount', 'how much', 'amount need']):
-            amount_match = re.search(r'([\d,]+(?:\.[\d,]+)?\s*(?:lakh|crore|lakhs|crores)?)', text_lower)
-            if amount_match:
-                amount = convert_amount(amount_match.group(1))
-                if amount and amount >= 100000:
-                    extracted['loan_amount'] = amount
-        
+        print(f"DEBUG - Fallback extracted: {extracted}")
         return extracted
+    
+    def convert_amount_to_number(self, amount_str: str) -> float:
+        """Convert lakh/crore amounts to numbers with error handling"""
+        if isinstance(amount_str, (int, float)):
+            return float(amount_str)
+            
+        amount_str = str(amount_str).lower().strip()
+        
+        # Remove currency symbols and extra spaces
+        amount_str = re.sub(r'[₹rs\.\s]+', '', amount_str)
+        
+        # Extract number and unit
+        number_match = re.search(r'([\d,]+(?:\.[\d,]+)?)', amount_str)
+        if not number_match:
+            return 0.0
+        
+        # Remove commas and convert to float
+        number_str = number_match.group(1).replace(',', '')
+        try:
+            number = float(number_str)
+        except ValueError:
+            return 0.0
+        
+        if 'crore' in amount_str:
+            return number * 10000000  # 1 crore = 1,00,00,000
+        elif 'lakh' in amount_str:
+            return number * 100000    # 1 lakh = 1,00,000
+        else:
+            return number
+    
+    def validate_field(self, field_name: str, value: Any) -> Tuple[bool, str]:
+        """Validate individual field values with strict eligibility criteria"""
+        try:
+            if field_name == "Customer_Name":
+                if not value or not str(value).strip():
+                    return False, "Please provide your full name."
+                name = str(value).strip()
+                if len(name) < 2:
+                    return False, "Please provide your complete name."
+                return True, ""
+                
+            elif field_name == "Customer_Email":
+                email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+                if not re.match(email_pattern, str(value)):
+                    return False, "Please provide a valid email address."
+                return True, ""
+                
+            elif field_name == "Customer_Phone":
+                phone_str = str(value).replace(' ', '').replace('-', '').replace('(', '').replace(')', '').replace('+91', '')
+                if not phone_str.isdigit() or len(phone_str) != 10 or phone_str[0] not in '6789':
+                    return False, "Please provide a valid 10-digit mobile number starting with 6, 7, 8, or 9."
+                return True, ""
+                
+            elif field_name == "Age":
+                age = float(value)
+                if age < 18:
+                    return False, "INELIGIBLE: You must be at least 18 years old to apply for a car loan."
+                elif age > 80:
+                    return False, "INELIGIBLE: Maximum age limit for car loan is 80 years."
+                return True, ""
+                
+            # Car loan specific validations
+            elif field_name == "CIBIL":
+                cibil = float(value)
+                if cibil < 650:
+                    return False, "INELIGIBLE: A minimum CIBIL score of 650 is required for car loan approval. Your current score does not meet our eligibility criteria."
+                elif not (300 <= cibil <= 900):
+                    return False, "Please provide a valid CIBIL score between 300 and 900. Could you check and confirm your credit score?"
+                return True, ""
+                
+            elif field_name == "applicant_annual_salary":
+                salary = float(value)
+                if salary <= 0:
+                    return False, "Annual salary must be a positive amount. Please provide your yearly salary."
+                elif salary < 300000:
+                    return False, "INELIGIBLE: Minimum annual salary of ₹3,00,000 is required for car loan eligibility."
+                elif salary > 100000000:
+                    return False, "Please verify your annual salary. The amount seems unusually high. Could you confirm your yearly income?"
+                return True, ""
+                
+            elif field_name == "Coapplicant_Annual_Income":
+                income = float(value)
+                if income < 0:
+                    return False, "Co-applicant income cannot be negative. Please provide the co-applicant's yearly income (enter 0 if no co-applicant)."
+                elif income > 100000000:
+                    return False, "Please verify the co-applicant's income. The amount seems unusually high."
+                return True, ""
+                
+            elif field_name == "Car_Type":
+                valid_types = ["Sedan", "SUV", "Hatchback", "Coupe"]
+                if value not in valid_types:
+                    return False, f"Please select your car type from: {', '.join(valid_types)}. Which type of car are you planning to purchase?"
+                return True, ""
+                
+            elif field_name == "down_payment_percent":
+                percent = float(value)
+                if not (10 <= percent <= 50):
+                    return False, "Down payment percentage must be between 10% and 50%. Please specify your down payment percentage."
+                return True, ""
+                
+            elif field_name == "Tenure":
+                tenure = float(value)
+                if not (1 <= tenure <= 7):
+                    return False, "Car loan tenure must be between 1 and 7 years. Please specify your preferred repayment period."
+                return True, ""
+                
+            elif field_name == "loan_amount":
+                amount = float(value)
+                if amount <= 0:
+                    return False, "Loan amount must be a positive amount. Please specify how much loan you need."
+                elif amount < 100000:
+                    return False, "INELIGIBLE: Minimum loan amount is ₹1,00,000 for car loans."
+                elif amount > 50000000:
+                    return False, "Please verify your loan requirement. The amount seems unusually high for a car loan. Could you confirm the loan amount needed?"
+                return True, ""
+                
+            return True, ""
+            
+        except (ValueError, TypeError):
+            field_display = field_name.replace('_', ' ').lower()
+            return False, f"Please provide a valid {field_display} in the correct format."
 
     def prepare_model_input(self, user_input: Dict[str, Any]) -> pd.DataFrame:
         """Prepare input data for the car loan model"""

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import { API_CONFIG } from '../../config/api';
 
 export default function AdminExports() {
   const [exports, setExports] = useState({});
@@ -14,7 +15,8 @@ export default function AdminExports() {
     { key: 'home', name: 'Home', icon: '🏠', color: 'bg-green-500' },
     { key: 'personal', name: 'Personal', icon: '👤', color: 'bg-purple-500' },
     { key: 'gold', name: 'Gold', icon: '🥇', color: 'bg-yellow-500' },
-    { key: 'business', name: 'Business', icon: '💼', color: 'bg-red-500' }
+    { key: 'business', name: 'Business', icon: '💼', color: 'bg-red-500' },
+    { key: 'car', name: 'Car', icon: '🚗', color: 'bg-indigo-500' }
   ];
 
   useEffect(() => {
@@ -24,7 +26,7 @@ export default function AdminExports() {
   const fetchExportInfo = async () => {
     try {
       setLoading(true);
-      const response = await axios.get('http://localhost:8001/admin/exports');
+      const response = await axios.get(`${API_CONFIG.BASE_URL}/admin/exports`);
       setExports(response.data);
       setError(null);
     } catch (err) {
@@ -61,6 +63,12 @@ export default function AdminExports() {
           size: 5120, 
           lastModified: new Date(Date.now() - 259200000).toISOString(),
           recordCount: 4
+        },
+        car: { 
+          exists: true, 
+          size: 12480, 
+          lastModified: new Date(Date.now() - 86400000).toISOString(),
+          recordCount: 9
         }
       });
     } finally {
@@ -71,7 +79,7 @@ export default function AdminExports() {
   const downloadCSV = async (loanType) => {
     try {
       setDownloadingType(loanType);
-      const response = await axios.get(`http://localhost:8001/admin/export/${loanType}`, {
+      const response = await axios.get(`${API_CONFIG.BASE_URL}/admin/export/${loanType}`, {
         responseType: 'blob'
       });
       
@@ -96,7 +104,7 @@ export default function AdminExports() {
   const generateReport = async (loanType) => {
     try {
       setDownloadingType(loanType);
-      await axios.post(`http://localhost:8001/admin/generate-report/${loanType}`);
+      await axios.post(`${API_CONFIG.BASE_URL}/admin/generate-report/${loanType}`);
       // Refresh export info after generating
       await fetchExportInfo();
       alert(`Report generated successfully for ${loanType} loans!`);

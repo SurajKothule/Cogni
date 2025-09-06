@@ -21,9 +21,9 @@ export default function Header() {
 
   const navLinks = [
     { name: 'Home', href: '/' },
-    { name: 'Personal Banking', href: '/personal' },
+    { name: 'Personal Banking', href: '/personalbanking' },
     { name: 'Loans', href: '/loans' },
-    { name: 'Credit Cards', href: '/credit-cards' },
+    { name: 'Credit Cards', href: '/creditcard' },
     { name: 'Complaints', href: '/complaints' },
     { name: 'About', href: '/about' }
   ];
