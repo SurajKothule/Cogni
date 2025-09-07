@@ -18,6 +18,8 @@ const Chatbot = ({ onClose }) => {
   const [currentLoanType, setCurrentLoanType] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef(null);
+  const inputRef = useRef(null);
+  const currentRequestRef = useRef(null);
 
   const API_BASE_URL = API_CONFIG.BASE_URL;
 
@@ -72,6 +74,13 @@ const Chatbot = ({ onClose }) => {
     scrollToBottom();
   }, [messages]);
 
+  // Focus input when component mounts or after sending message
+  useEffect(() => {
+    if (inputRef.current && !isLoading) {
+      inputRef.current.focus();
+    }
+  }, [isLoading]);
+
   const addMessage = (text, sender, isLoading = false) => {
     const newMessage = {
       id: Date.now() + Math.random(),
@@ -92,6 +101,17 @@ const Chatbot = ({ onClose }) => {
     );
   };
 
+  const createAxiosConfig = (timeoutMs = 60000) => ({
+    timeout: timeoutMs,
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    // Add retry configuration
+    validateStatus: function (status) {
+      return status < 500; // Don't throw for 4xx errors, only 5xx
+    }
+  });
+
   const startLoanApplication = async (loanType) => {
     setIsLoading(true);
     const loadingId = addMessage(
@@ -101,36 +121,67 @@ const Chatbot = ({ onClose }) => {
     );
 
     try {
+      // Cancel any existing request
+      if (currentRequestRef.current) {
+        currentRequestRef.current.cancel('New request initiated');
+      }
+
+      // Create cancel token
+      const cancelToken = axios.CancelToken.source();
+      currentRequestRef.current = cancelToken;
+
       const response = await axios.post(
         `${API_BASE_URL}${API_CONFIG.ENDPOINTS.CHAT_START}`,
         {
           loan_type: loanType,
         },
         {
-          timeout: 150000, // 15 second timeout for starting session
-          headers: {
-            'Content-Type': 'application/json'
-          }
+          ...createAxiosConfig(60000), // 60 second timeout for starting session
+          cancelToken: cancelToken.token
         }
       );
 
-      setSessionId(response.data.session_id);
-      setCurrentLoanType(loanType);
-      updateMessage(loadingId, response.data.message);
+      if (response.status === 200 && response.data) {
+        setSessionId(response.data.session_id);
+        setCurrentLoanType(loanType);
+        updateMessage(loadingId, response.data.message);
+      } else {
+        throw new Error(`Unexpected response: ${response.status}`);
+      }
     } catch (error) {
       console.error("Error starting chat:", error);
       
-      let errorMessage = "Sorry, I encountered an error starting your application. Please try again.";
+      let errorMessage = "Sorry, I encountered an error starting your application.";
       
-      if (error.code === 'ECONNABORTED') {
-        errorMessage = "Connection timed out. Please check your internet connection and try again.";
+      if (axios.isCancel(error)) {
+        return; // Request was cancelled, don't show error
+      } else if (error.code === 'ECONNABORTED') {
+        errorMessage = "The request is taking longer than expected. This might be due to server load. Would you like to try again?";
       } else if (error.response) {
-        errorMessage = `Unable to start application: ${error.response.data?.detail || error.response.statusText}`;
+        const status = error.response.status;
+        if (status >= 500) {
+          errorMessage = "Our server is currently experiencing issues. Please try again in a few moments.";
+        } else if (status === 404) {
+          errorMessage = "Service endpoint not found. Please contact support.";
+        } else {
+          errorMessage = `Unable to start application: ${error.response.data?.detail || error.response.statusText}`;
+        }
+      } else if (error.request) {
+        errorMessage = "Unable to connect to our servers. Please check your internet connection and try again.";
       }
       
       updateMessage(loadingId, errorMessage);
+      
+      // Add retry button for certain errors
+      if (error.code === 'ECONNABORTED' || !error.response || error.response.status >= 500) {
+        setTimeout(() => {
+          addMessage("You can try again by clicking on the loan type above or typing your request.", "bot");
+        }, 1000);
+      }
+    } finally {
+      setIsLoading(false);
+      currentRequestRef.current = null;
     }
-    setIsLoading(false);
   };
 
   const sendMessageToAPI = async (message) => {
@@ -140,6 +191,15 @@ const Chatbot = ({ onClose }) => {
     const loadingId = addMessage("Processing your information...", "bot", true);
 
     try {
+      // Cancel any existing request
+      if (currentRequestRef.current) {
+        currentRequestRef.current.cancel('New request initiated');
+      }
+
+      // Create cancel token
+      const cancelToken = axios.CancelToken.source();
+      currentRequestRef.current = cancelToken;
+
       const response = await axios.post(
         `${API_BASE_URL}${API_CONFIG.ENDPOINTS.CHAT_MESSAGE}`,
         {
@@ -147,35 +207,34 @@ const Chatbot = ({ onClose }) => {
           message: message,
         },
         {
-          timeout: 30000, // 30 second timeout
-          headers: {
-            'Content-Type': 'application/json'
-          }
+          ...createAxiosConfig(90000), // 90 second timeout for message processing
+          cancelToken: cancelToken.token
         }
       );
 
-      updateMessage(loadingId, response.data.message);
+      if (response.status === 200 && response.data) {
+        updateMessage(loadingId, response.data.message);
 
-      // If prediction is available, show results
-      if (response.data.prediction) {
-        const result = response.data.prediction.result;
-        const profile = response.data.prediction.profile;
-        const requestedAmount = result.requested_amount;
-        const eligibleAmount = result.eligible_amount;
-        const loanTypeName =
-          currentLoanType.charAt(0).toUpperCase() + currentLoanType.slice(1);
+        // If prediction is available, show results
+        if (response.data.prediction) {
+          const result = response.data.prediction.result;
+          const profile = response.data.prediction.profile;
+          const requestedAmount = result.requested_amount;
+          const eligibleAmount = result.approved_amount;
+          const loanTypeName =
+            currentLoanType.charAt(0).toUpperCase() + currentLoanType.slice(1);
 
-        setTimeout(() => {
-          let resultMessage = "";
+          setTimeout(() => {
+            let resultMessage = "";
 
-          if (result.status === "APPROVED") {
-            // Full approval - customer gets what they asked for
-            resultMessage = `
+            if (result.status === "APPROVED") {
+              // Full approval - customer gets what they asked for
+              resultMessage = `
 Great News! You're Pre-Approved for ${loanTypeName} Loan
 
 YES! You are eligible for ₹${requestedAmount.toLocaleString()} at ${
-              result.interest_rate
-            }% per annum
+                result.interest_rate
+              }% per annum
 
 What's Next:
 • Your loan application is pre-approved
@@ -189,15 +248,15 @@ Why Choose Us:
 • Dedicated customer support throughout the process
 
 Ready to proceed? Our team will reach out to you soon!
-            `;
-          } else {
-            // Partial approval - offer what they can get
-            resultMessage = `
+              `;
+            } else {
+              // Partial approval - offer what they can get
+              resultMessage = `
 Good News! You're Eligible for ${loanTypeName} Loan
 
 You can get up to ₹${eligibleAmount.toLocaleString()} at ${
-              result.interest_rate
-            }% per annum
+                result.interest_rate
+              }% per annum
 
 Your Application Summary:
 • Requested Amount: ₹${requestedAmount.toLocaleString()}
@@ -213,30 +272,53 @@ Special Benefits:
 Want to discuss your options? Our loan specialist will call you to explore ways to maximize your loan amount.
 
 Our team will contact you within 24 hours to proceed!
-            `;
-          }
+              `;
+            }
 
-          addMessage(resultMessage, "bot");
-        }, 1000);
+            addMessage(resultMessage, "bot");
+          }, 1000);
+        }
+      } else {
+        throw new Error(`Unexpected response: ${response.status}`);
       }
     } catch (error) {
       console.error("Error sending message:", error);
       
-      let errorMessage = "Sorry, I encountered an error. Please try again.";
+      let errorMessage = "Sorry, I encountered an error processing your request.";
       
-      if (error.code === 'ECONNABORTED') {
-        errorMessage = "Request timed out. Please check your connection and try again.";
+      if (axios.isCancel(error)) {
+        return; // Request was cancelled, don't show error
+      } else if (error.code === 'ECONNABORTED') {
+        errorMessage = "Your request is taking longer than expected. This might be due to high server load. Please try again or contact support if the issue persists.";
       } else if (error.response) {
-        // Server responded with error status
-        errorMessage = `Server error: ${error.response.data?.detail || error.response.statusText}`;
+        const status = error.response.status;
+        if (status >= 500) {
+          errorMessage = "Our server is currently experiencing issues. Please try again in a few moments.";
+        } else if (status === 401) {
+          errorMessage = "Your session has expired. Please start over.";
+          setSessionId(null);
+          setCurrentLoanType(null);
+        } else if (status === 404) {
+          errorMessage = "Service endpoint not found. Please contact support.";
+        } else {
+          errorMessage = `Server error: ${error.response.data?.detail || error.response.statusText}`;
+        }
       } else if (error.request) {
-        // Request was made but no response received
-        errorMessage = "Unable to connect to server. Please check your connection.";
+        errorMessage = "Unable to connect to our servers. Please check your internet connection and try again.";
       }
       
       updateMessage(loadingId, errorMessage);
+      
+      // Add helpful suggestions
+      setTimeout(() => {
+        if (error.code === 'ECONNABORTED' || !error.response || error.response.status >= 500) {
+          addMessage("You can try sending your message again or use 'Start Over' to begin a new session.", "bot");
+        }
+      }, 1000);
+    } finally {
+      setIsLoading(false);
+      currentRequestRef.current = null;
     }
-    setIsLoading(false);
   };
 
   const handleSendMessage = () => {
@@ -254,10 +336,16 @@ Our team will contact you within 24 hours to proceed!
           startLoanApplication("home");
         } else if (lowerMessage.includes("personal")) {
           startLoanApplication("personal");
+        } else if (lowerMessage.includes("gold")) {
+          startLoanApplication("gold");
+        } else if (lowerMessage.includes("business")) {
+          startLoanApplication("business");
+        } else if (lowerMessage.includes("car")) {
+          startLoanApplication("car");
         } else {
           setTimeout(() => {
             addMessage(
-              "Please select a loan type from the options below, or tell me which type of loan you need (education, home, or personal).",
+              "Please select a loan type from the options below, or tell me which type of loan you need (education, home, personal, gold, business, or car).",
               "bot"
             );
           }, 500);
@@ -276,8 +364,14 @@ Our team will contact you within 24 hours to proceed!
     if (action.action === "loan") {
       startLoanApplication(action.loanType);
     } else if (action.action === "restart") {
+      // Cancel any ongoing request
+      if (currentRequestRef.current) {
+        currentRequestRef.current.cancel('Restarting chat');
+      }
+      
       setSessionId(null);
       setCurrentLoanType(null);
+      setIsLoading(false);
       setMessages([
         {
           id: 1,
@@ -290,10 +384,20 @@ Our team will contact you within 24 hours to proceed!
   };
 
   const handleKeyPress = (e) => {
-    if (e.key === "Enter") {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
       handleSendMessage();
     }
   };
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (currentRequestRef.current) {
+        currentRequestRef.current.cancel('Component unmounting');
+      }
+    };
+  }, []);
 
   return (
     <div className="flex flex-col h-[600px] w-[405px] bg-white rounded-lg shadow-2xl border border-gray-200 overflow-hidden font-sans">
@@ -367,63 +471,59 @@ Our team will contact you within 24 hours to proceed!
       </div>
 
       {/* Quick Action Buttons */}
-        
-        <div className="px-4 py-3 bg-gray-50 border-t border-gray-200">
-          <div className="flex flex-wrap gap-2">
-            {quickActions.map((action) => (
-              <button
-                key={action.id}
-                onClick={() => handleQuickAction(action)}
-                disabled={isLoading}
-                className="px-4 py-2 text-sm text-[#000048] border border-[#000048] rounded-full hover:bg-[#000048] hover:text-white transition-all duration-200 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {action.text}
-              </button>
-            ))}
-          </div>
+      <div className="px-4 py-3 bg-gray-50 border-t border-gray-200">
+        <div className="flex flex-wrap gap-2">
+          {quickActions.map((action) => (
+            <button
+              key={action.id}
+              onClick={() => handleQuickAction(action)}
+              disabled={isLoading}
+              className="px-4 py-2 text-sm text-[#000048] border border-[#000048] rounded-full hover:bg-[#000048] hover:text-white transition-all duration-200 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {action.text}
+            </button>
+          ))}
         </div>
-      
+      </div>
 
       {/* Input Area */}
-      {/* Input Area */}
-<div className="px-4 py-3 bg-white border-t border-gray-200">
-  <div className="flex items-center space-x-3">
-    <input
-      type="text"
-      value={inputMessage}
-      onChange={(e) => setInputMessage(e.target.value)}
-      onKeyPress={handleKeyPress}
-      placeholder={
-        sessionId
-          ? "Tell me about your loan requirements..."
-          : "Type your message or select a loan type..."
-      }
-      disabled={isLoading}
-      autoFocus // This keeps the input focused
-      className="flex-1 px-4 py-3 text-sm border text-gray-500 border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-[#000048]/20 focus:border-[#000048] disabled:opacity-50"
-      ref={input => input && input.focus()} // Additional focus management
-    />
-    <button
-      onClick={handleSendMessage}
-      disabled={!inputMessage.trim() || isLoading}
-      className="p-3 bg-[#000048] text-white rounded-full hover:bg-[#000048]/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
-    >
-      <svg
-        className="w-5 h-5 transform rotate-45"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth={2}
-          d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
-        />
-      </svg>
-    </button>
-  </div>
-</div>
+      <div className="px-4 py-3 bg-white border-t border-gray-200">
+        <div className="flex items-center space-x-3">
+          <input
+            ref={inputRef}
+            type="text"
+            value={inputMessage}
+            onChange={(e) => setInputMessage(e.target.value)}
+            onKeyPress={handleKeyPress}
+            placeholder={
+              sessionId
+                ? "Tell me about your loan requirements..."
+                : "Type your message or select a loan type..."
+            }
+            disabled={isLoading}
+            className="flex-1 px-4 py-3 text-sm border text-gray-500 border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-[#000048]/20 focus:border-[#000048] disabled:opacity-50"
+          />
+          <button
+            onClick={handleSendMessage}
+            disabled={!inputMessage.trim() || isLoading}
+            className="p-3 bg-[#000048] text-white rounded-full hover:bg-[#000048]/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
+          >
+            <svg
+              className="w-5 h-5 transform rotate-45"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
+              />
+            </svg>
+          </button>
+        </div>
+      </div>
     </div>
   );
 };

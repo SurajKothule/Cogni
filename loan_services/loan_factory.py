@@ -24,7 +24,7 @@ class LoanServiceFactory:
     }
     
     MODEL_PATHS: Dict[str, str] = {
-        "education": "models/education_loan_models",
+        "education": "models/education _loan_models",
         "home": "models/home_loan_models", 
         "personal": "models/personal_loan_models",
         "gold": "models/gold_loan_models",
@@ -53,7 +53,10 @@ class LoanServiceFactory:
         """Create a new loan service instance"""
         
         service_class = cls.SERVICE_CLASSES[loan_type]
-        model_path = cls.MODEL_PATHS[loan_type]
+        # Resolve to absolute path relative to project root (one level up from this file's directory)
+        relative_model_path = cls.MODEL_PATHS[loan_type]
+        base_dir = os.path.dirname(os.path.dirname(__file__))
+        model_path = os.path.join(base_dir, relative_model_path) if not os.path.isabs(relative_model_path) else relative_model_path
         
         # Check if model directory exists
         if not os.path.exists(model_path):

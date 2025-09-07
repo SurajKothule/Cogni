@@ -355,8 +355,18 @@ def chat_message(req: MessageRequest):
                     numeric_fields = ["Age", "Employment_Duration_Years", "Annual_Income", 
                                     "CIBIL_Score", "Existing_EMIs", "Loan_Term_Years", "Expected_Loan_Amount"]
                 elif loan_type == "business":
-                    numeric_fields = ["Business_Age_Years", "Annual_Revenue", "Net_Profit", "CIBIL_Score",
-                                    "Existing_Loan_Amount", "Loan_Tenure_Years", "Expected_Loan_Amount"]
+                    numeric_fields = [
+                        "Business_Age",
+                        "Annual_Revenue",
+                        "Net_Profit",
+                        "CIBIL_Score",
+                        "Existing_Business_EMI",
+                        "Requested_Loan_Amount",
+                        "Tenure",
+                        "Collateral_Value",
+                        "Guarantor_Income",
+                        "Profit_Margin"
+                    ]
                 elif loan_type == "gold":
                     numeric_fields = ["Age", "Annual_Income", "CIBIL_Score", "Gold_Value", "Loan_Amount", "Loan_Tenure"]
                 elif loan_type == "car":
@@ -398,7 +408,7 @@ def chat_message(req: MessageRequest):
                     "education": "Expected_Loan_Amount",
                     "home": "Loan_amount_requested", 
                     "personal": "Expected_Loan_Amount",
-                    "business": "Expected_Loan_Amount",
+                    "business": "Requested_Loan_Amount",
                     "gold": "Loan_Amount",
                     "car": "loan_amount"
                 }
