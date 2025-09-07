@@ -5,8 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-  "start": "next start -p $PORT",
-  "dev": "next dev",
+    "start": "next start -p $PORT"
     "lint": "eslint"
   },
   "dependencies": {
