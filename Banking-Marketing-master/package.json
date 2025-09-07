@@ -5,11 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-<<<<<<< HEAD
     "start": "next start -p $PORT",
-=======
-    "start": "next start -p $PORT"
->>>>>>> 0450f457c93d266a58b2e9911d8c1074178a7915
+
     "lint": "eslint"
   },
   "dependencies": {
